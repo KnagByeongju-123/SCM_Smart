@@ -15,6 +15,8 @@ const ROOT=path.join(__dirname,'..');
 const IDX=fs.readFileSync(path.join(ROOT,'index.html'),'utf8');
 const BOARD=(()=>{const i=IDX.indexOf('window.__SCREENS=')+17;let d=0,k=i,s=false,e=false;for(;k<IDX.length;k++){const c=IDX[k];if(s){if(e)e=false;else if(c==='\\')e=true;else if(c==='"')s=false;continue}if(c==='"')s=true;else if(c==='{')d++;else if(c==='}'){d--;if(!d)break}}
   return JSON.parse(IDX.slice(i,k+1))['machining_progress_board.html'].replace('window.fetch=(u,o)=>parent.fetch(u,o);','')})();
+const RTCJ=(()=>{const i=IDX.indexOf('window.__SCREENS=')+17;let d=0,k=i,s=false,e=false;for(;k<IDX.length;k++){const c=IDX[k];if(s){if(e)e=false;else if(c==='\\')e=true;else if(c==='"')s=false;continue}if(c==='"')s=true;else if(c==='{')d++;else if(c==='}'){d--;if(!d)break}}
+  return JSON.parse(IDX.slice(i,k+1))['rtcj_status.html'].replace('window.fetch=(u,o)=>parent.fetch(u,o);','')})();
 const QRIN=fs.readFileSync(path.join(ROOT,'qr_in.html'),'utf8').replace(/<script src=[^>]+><\/script>/,'');
 /* ── 가짜 DB (PostgREST 흉내) ── */
 const HOME='KI01',LOT='PL-T1';
@@ -27,7 +29,7 @@ function seed(){DB={
  prod_lot:[{lot_no:LOT,result_no:'PR-1',item_cd:'IT-1',lot_qty:600,remain_qty:600,cur_seq:0,cur_site:HOME,status:'대기',travel_print_cnt:1}],
  lot_process:[['밀링','V026','외주'],['열처리','V009','외주'],['평면연마',HOME,'사내']].map(([proc_nm,site_cd,inout_type],i)=>({proc_id:LOT+'-P'+(i+1),lot_no:LOT,route_id:'R'+(i+1),seq:i+1,proc_nm,site_cd,inout_type,status:'대기',lead_days:3})),
  lot_move:[]}}
-const PK={lot_process:'proc_id',prod_lot:'lot_no',lot_move:'move_no',process_route:'route_id',items:'item_cd'};
+const PK={lot_process:'proc_id',prod_lot:'lot_no',lot_move:'move_no',process_route:'route_id',items:'item_cd',lot_ship:'ship_no',scm_customer:'cust_cd'};
 function filt(rows,qs){for(const [k,v] of new URLSearchParams(qs)){if(['select','order','limit','offset','on_conflict'].includes(k))continue;const m=v.match(/^(eq|neq|in|like|is)\.(.*)$/);if(!m)continue;const [,op,val]=m;
   rows=rows.filter(r=>{const x=r[k]==null?null:String(r[k]);if(op==='eq')return x===val;if(op==='neq')return x!==val;if(op==='is')return val==='null'?x==null:true;if(op==='in')return val.replace(/^\(|\)$/g,'').split(',').map(s=>s.replace(/^"|"$/g,'')).includes(x);if(op==='like')return x!=null&&x.startsWith(val.replace(/\*$/,''));return true})}return rows}
 async function api(u,o={}){u=String(u);const mth=(o.method||'GET').toUpperCase();const R=(b)=>{const t=JSON.stringify(b);return {ok:true,status:200,headers:{get:()=>null},text:async()=>t,json:async()=>JSON.parse(t)}};
@@ -255,4 +257,27 @@ await scenario('V2. [3] 나눠 출고 2건 → 협력사 2건 각각 확인 · �
 await scenario('V3. [3] 재작업 출고도 협력사 수령확인 대상',async()=>{
  await O.order(1,'V026',600);await QRrcv('V026',[600]);await QR(600,20);await O.rwOut(1,'V026',20);
  const r=await QRrcv('V026',[20]);check('재작업 20 수령확인',{ok:()=>r.items===1&&DB.lot_move.filter(m=>m.move_type==='수령확인').length===2})});
+async function finishLot(){await O.order(1,'V026',600);await QR(600);await O.confirm(1);await O.order(2,'V009',600);await QR(600,10,{seq:2});await O.confirm(2);await O.order(3,HOME,590);await QR(590,0,{seq:3});await O.confirm(3)}
+async function shipWin(){await reload();OF.__openShip('IT-1');await wait(50);return OF.document}
+const stockOf1=d=>{const el=d.querySelector('.sh_l[data-lot="'+LOT+'"]');return el?Number(el.max):0};
+await scenario('W1. [4] 고객 출하 — 가공완료 590 → 고객 등록 → FIFO 300 출하 → 초과 출하 막힘',async()=>{
+ await finishLot();check('로트 가공완료 590',{'lot.status':'가공완료','lot.remain_qty':590});
+ let d=await shipWin();check('출하 창 재고 '+stockOf1(d),{ok:()=>stockOf1(d)===590});
+ d.getElementById('sh_ccd').value='C01';d.getElementById('sh_cnm').value='SKF';await d.getElementById('sh_cadd').onclick();await wait(50);d=OF.document;
+ check('고객 등록 SKF',{ok:()=>DB.scm_customer&&DB.scm_customer.length===1&&d.getElementById('sh_cust').value==='C01'});
+ d.getElementById('sh_qty').value=300;d.getElementById('sh_fifo').onclick();d.getElementById('sh_go').onclick();await wait(300);d=OF.document;
+ check('출하 300 기록 → 재고 '+stockOf1(d),{ok:()=>DB.lot_ship.length===1&&DB.lot_ship[0].qty===300&&DB.lot_ship[0].cust_cd==='C01'&&stockOf1(d)===290});
+ await reload();OF.renderJobs&&OF.renderJobs();await wait(50);const jr=OF.document.querySelector('#jobBody tr[data-item="IT-1"]');const jc=jr?jr.cells[jr.cells.length-1].textContent:'';check('품번 리스트 가공완료재고 '+jc,{ok:()=>/^290$/.test(jc.replace(/,/g,'').trim())});
+ const n=ASK.length;d.getElementById('sh_cust').value='C01';d.querySelector('.sh_l').value=400;d.getElementById('sh_go').onclick();await wait(200);
+ check('재고 290 에서 400 출하 → '+(ASK.slice(n).some(x=>/재고는/.test(x))?'막힘':'처리됨(문제)'),{ok:()=>DB.lot_ship.length===1})});
+await scenario('W2. [4] 고객 반품 — 재고복귀 50 / 미복귀 20 / 초과 반품 막힘 · 로트추적에 고객 표시',async()=>{
+ await finishLot();let d=await shipWin();d.getElementById('sh_ccd').value='C01';d.getElementById('sh_cnm').value='SKF';await d.getElementById('sh_cadd').onclick();await wait(50);d=OF.document;
+ d.getElementById('sh_qty').value=300;d.getElementById('sh_fifo').onclick();d.getElementById('sh_go').onclick();await wait(300);
+ const ret=async(q,r,rs)=>{const d=OF.document;d.querySelector('.sh_ret').onclick();d.getElementById('rt_q').value=q;d.getElementById('rt_r').value=r;d.getElementById('rt_s').checked=rs;await d.getElementById('rt_go').onclick();await wait(300)};
+ await ret(50,'수량착오',true);d=await shipWin();check('반품 50 재고복귀 → 재고 '+stockOf1(d),{ok:()=>stockOf1(d)===340});
+ await ret(20,'품질불량',false);d=await shipWin();check('반품 20 미복귀 → 재고 '+stockOf1(d)+' 그대로',{ok:()=>stockOf1(d)===340});
+ const n=ASK.length;await ret(300,'기타',true);check('남은 반품가능 230 에서 300 → '+(ASK.slice(n).some(x=>/반품수량은/.test(x))?'막힘':'처리됨(문제)'),{ok:()=>DB.lot_ship.filter(x=>x.ship_type==='반품').length===2});
+ const dom=new JSDOM(RTCJ,{runScripts:'dangerously',pretendToBeVisual:true,url:'https://x/index.html',virtualConsole:vc,beforeParse(w){w.APP_CONFIG={MODE:'supabase',SUPABASE:{url:'https://db.test',key:'k'},NO_LOGIN:true,STORAGE:'sim',USER_NAME:'사무실',PAGES:{},MODULES:[],APP:{}};common(w)}});
+ await wait(2500);const rw=dom.window.document,th=[...rw.querySelectorAll('thead th')].pop(),row=[...rw.querySelectorAll('#tbody tr')].find(tr=>tr.textContent.includes(LOT));
+ check('로트추적 「'+(th&&th.textContent)+'」 = '+(row?row.lastElementChild.textContent:'(행 없음)'),{ok:()=>row&&/SKF 230/.test(row.lastElementChild.textContent)})});
 console.log('\n'+(FAIL?'❌ 실패 '+FAIL+'건':'✅ 전체 통과'));process.exit(FAIL?1:0)})();
