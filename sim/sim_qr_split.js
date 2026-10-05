@@ -280,4 +280,18 @@ await scenario('W2. [4] 고객 반품 — 재고복귀 50 / 미복귀 20 / 초�
  const dom=new JSDOM(RTCJ,{runScripts:'dangerously',pretendToBeVisual:true,url:'https://x/index.html',virtualConsole:vc,beforeParse(w){w.APP_CONFIG={MODE:'supabase',SUPABASE:{url:'https://db.test',key:'k'},NO_LOGIN:true,STORAGE:'sim',USER_NAME:'사무실',PAGES:{},MODULES:[],APP:{}};common(w)}});
  await wait(2500);const rw=dom.window.document,th=[...rw.querySelectorAll('thead th')].pop(),row=[...rw.querySelectorAll('#tbody tr')].find(tr=>tr.textContent.includes(LOT));
  check('로트추적 「'+(th&&th.textContent)+'」 = '+(row?row.lastElementChild.textContent:'(행 없음)'),{ok:()=>row&&/SKF 230/.test(row.lastElementChild.textContent)})});
+await scenario('X. 모바일 ☰ 메뉴 — 본사: 출고/입고 모드·미입고/미출고 현황 · 협력사: 수령 대기 목록',async()=>{
+ await O.order(1,'V026',600,null,{noShip:true});await O.ship(1,300);
+ let w=await qrOpen(),d=w.document;d.getElementById('hamb').onclick();const on=d.getElementById('drawer').classList.contains('on'),items=[...d.querySelectorAll('#dNav .mi')].map(b=>b.textContent.replace(/\s+/g,' ').trim());
+ check('메뉴 펼침 · 항목: '+items.map(x=>x.split(' ')[1]).join(' / '),{ok:()=>on&&items.length===5});
+ const pickMenu=async k=>{d.getElementById('hamb').onclick();d.querySelector('#dNav .mi[data-k="'+k+'"]').onclick();await wait(250)};
+ await pickMenu('in');await w.eval('loadLot("'+LOT+'","")');await wait(200);
+ check('입고 모드 → 입고 카드만 ('+['shipCard','inCard'].filter(i=>!d.getElementById(i).classList.contains('hide')).join(',')+')',{ok:()=>d.getElementById('shipCard').classList.contains('hide')&&!d.getElementById('inCard').classList.contains('hide')});
+ await pickMenu('ship');await w.eval('loadLot("'+LOT+'","")');await wait(200);
+ check('출고 모드 → 출고 카드만',{ok:()=>!d.getElementById('shipCard').classList.contains('hide')&&d.getElementById('inCard').classList.contains('hide')});
+ await pickMenu('lin');let L=d.getElementById('listBody').textContent;check('미입고 현황: '+L.slice(0,40),{ok:()=>/PL-T1/.test(L)&&/300/.test(L)});
+ await pickMenu('lship');L=d.getElementById('listBody').textContent;check('미출고 현황: '+L.slice(0,40),{ok:()=>/PL-T1/.test(L)&&/300/.test(L)});
+ d.querySelector('#listBody .lrow').onclick();await wait(250);check('목록 누르면 그 로트 출고 화면',{ok:()=>!d.getElementById('shipCard').classList.contains('hide')});
+ w=await qrOpen('V026');d=w.document;d.getElementById('hamb').onclick();d.querySelector('#dNav .mi[data-k="lrcv"]').onclick();await wait(250);L=d.getElementById('listBody').textContent;
+ check('협력사 수령 대기 목록: '+L.slice(0,40),{ok:()=>/PL-T1/.test(L)&&/300/.test(L)})});
 console.log('\n'+(FAIL?'❌ 실패 '+FAIL+'건':'✅ 전체 통과'));process.exit(FAIL?1:0)})();
