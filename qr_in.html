@@ -46,6 +46,24 @@ label{display:block;font-size:12.5px;color:var(--sub);margin:10px 0 4px}
 .msg.info{background:#eef5fc;color:#22578a;border:1px solid #c6dcf0}
 .hide{display:none!important}
 .small{font-size:12px;color:var(--sub)}
+/* 숫자 입력 팝업 */
+input.np{cursor:pointer;font-size:20px;font-weight:700;text-align:right;caret-color:transparent;background:#fbfcfd}
+#npBg{position:fixed;inset:0;background:rgba(20,30,40,.5);z-index:50;display:none;align-items:flex-end;justify-content:center}
+#npBg.on{display:flex}
+#np{background:#fff;width:100%;max-width:420px;border-radius:16px 16px 0 0;padding:14px 14px calc(14px + env(safe-area-inset-bottom));box-shadow:0 -6px 24px rgba(0,0,0,.2)}
+#npHd{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px}
+#npHd b{font-size:15px}#npHd small{color:var(--sub);font-size:12px}
+#npVal{height:62px;border:2px solid var(--blue);border-radius:10px;font-size:34px;font-weight:700;display:flex;align-items:center;justify-content:flex-end;padding:0 14px;margin-bottom:10px;background:#f5f9fd}
+#npVal.ph{color:#b6c2cd}
+#npQuick{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px}
+#npQuick button{flex:1;min-width:70px;height:40px;border:1px solid #c6dcf0;background:#eef5fc;color:#22578a;border-radius:8px;font-weight:700;font-size:14px}
+#npKeys{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+#npKeys button{height:58px;border:0;border-radius:10px;background:#e8edf2;font-size:24px;font-weight:700;color:var(--ink);touch-action:manipulation}
+#npKeys button:active{background:#cfd8e1}
+#npKeys .fn{background:#dde3ea;font-size:18px}
+#npKeys .ok{grid-column:span 2;background:var(--ok);color:#fff;font-size:20px}
+#npKeys .cancel{background:#f1f3f5;font-size:17px;color:var(--sub)}
+@media (min-width:700px){#npBg{align-items:center}#np{border-radius:16px}}
 @media (min-width:700px){main{padding-top:20px}.info{grid-template-columns:90px 1fr}}
 </style>
 </head>
@@ -87,8 +105,8 @@ label{display:block;font-size:12.5px;color:var(--sub);margin:10px 0 4px}
       <b>수량</b><span id="vOut"></span>
     </div>
     <div class="row">
-      <div><label>입고수량</label><input id="inQty" type="number" inputmode="numeric" min="0"></div>
-      <div><label>불량</label><input id="ngQty" type="number" inputmode="numeric" min="0" value="0"></div>
+      <div><label>입고수량</label><input id="inQty" class="np" readonly inputmode="none" data-label="입고수량"></div>
+      <div><label>불량</label><input id="ngQty" class="np" readonly inputmode="none" value="0" data-label="불량"></div>
     </div>
     <label>입고일</label><input id="inDate" type="date">
     <div style="margin-top:14px"><button class="btn ok" id="saveBtn">✔ 입고 등록</button></div>
@@ -97,6 +115,19 @@ label{display:block;font-size:12.5px;color:var(--sub);margin:10px 0 4px}
 
   <div class="row hide" id="nextRow"><button class="btn primary" id="nextBtn">📷 다음 이동표 스캔</button></div>
 </main>
+
+<div id="npBg"><div id="np">
+  <div id="npHd"><b id="npTitle"></b><small id="npHint"></small></div>
+  <div id="npVal"></div>
+  <div id="npQuick"></div>
+  <div id="npKeys">
+    <button>7</button><button>8</button><button>9</button>
+    <button>4</button><button>5</button><button>6</button>
+    <button>1</button><button>2</button><button>3</button>
+    <button class="fn" data-k="C">C</button><button>0</button><button class="fn" data-k="BS">⌫</button>
+    <button class="cancel" data-k="X">취소</button><button class="ok" data-k="OK">확인</button>
+  </div>
+</div></div>
 
 <script>
 const URL_='https://jgvikmakenpllwxwdugk.supabase.co/rest/v1/';
@@ -245,6 +276,28 @@ $('saveBtn').onclick=async()=>{
     return loadLot(p.lot_no,CUR.qr).then(()=>{show('ok','✔ <b>'+esc(p.lot_no)+'</b> '+N(p.seq)+'공정 '+esc(p.proc_nm||'')+' 입고 등록 완료<br>입고 '+q.toLocaleString()+(ng?' · 불량 '+ng:'')+(CUR.act.length?'<br><small>아직 미입고가 남은 공정이 있습니다.</small>':''));$('nextRow').classList.remove('hide')});
   }catch(e){show('err','등록 실패: '+esc(e.message||e));$('saveBtn').disabled=false}};
 $('nextBtn').onclick=()=>{hideMsg();$('lotCard').classList.add('hide');$('itemCard').classList.add('hide');$('nextRow').classList.add('hide');$('lotIn').value='';window.scrollTo(0,0);startCam()};
+
+/* ── 숫자 입력 팝업 (현장용 큰 버튼) ── */
+let NP=null;
+function npShow(){const v=NP.buf;$('npVal').textContent=v===''?'0':Number(v).toLocaleString();$('npVal').classList.toggle('ph',v==='')}
+function openPad(inp){
+  const p=CUR&&CUR.sel,pend=p?pendOf(p):0,isNg=inp.id==='ngQty',iq=N($('inQty').value);
+  NP={inp,buf:'',first:true};
+  $('npTitle').textContent=inp.dataset.label;
+  $('npHint').textContent=isNg?'입고수량 '+iq.toLocaleString()+' 중':'미입고 '+pend.toLocaleString();
+  const q=isNg?[0]:[...new Set([pend,N(inp.value)].filter(x=>x>0))];
+  $('npQuick').innerHTML=q.map(x=>'<button data-q="'+x+'">'+(isNg?'불량 없음 (0)':(x===pend?'미입고 전량 ':'')+x.toLocaleString())+'</button>').join('');
+  $('npQuick').querySelectorAll('button').forEach(b=>b.onclick=()=>{inp.value=b.dataset.q;closePad()});
+  NP.buf=String(N(inp.value)||'');npShow();$('npBg').classList.add('on')}
+function closePad(){$('npBg').classList.remove('on');NP=null}
+document.querySelectorAll('input.np').forEach(el=>{el.addEventListener('click',e=>{e.preventDefault();el.blur();openPad(el)});el.addEventListener('focus',()=>el.blur())});
+$('npKeys').querySelectorAll('button').forEach(b=>b.onclick=()=>{if(!NP)return;const k=b.dataset.k||b.textContent;
+  if(k==='X')return closePad();
+  if(k==='OK'){NP.inp.value=N(NP.buf);return closePad()}
+  if(k==='C')NP.buf='';else if(k==='BS')NP.buf=NP.first?'':NP.buf.slice(0,-1);
+  else{if(NP.first)NP.buf='';NP.buf=(NP.buf+k).replace(/^0+(?=\d)/,'').slice(0,7)}
+  NP.first=false;try{navigator.vibrate&&navigator.vibrate(15)}catch(e){}npShow()});
+$('npBg').onclick=e=>{if(e.target.id==='npBg')closePad()};
 
 const QS=new URLSearchParams(location.search),qp=QS.get('lot'),qi=QS.get('item');if(qp)loadLot(qp.toUpperCase(),location.href);else if(qi)loadItem(qi,location.href);
 </script>
