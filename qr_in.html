@@ -137,6 +137,7 @@ async function onScan(text){
   const t=String(text||'').trim(),p=t.split('|');
   let lot='';
   if(p[0]==='TRAVEL'&&p[1])lot=p[1];
+  else if(/^https?:\/\//i.test(t)){try{lot=(new URL(t).searchParams.get('lot')||'').toUpperCase()}catch(e){}}
   else if(/^PL-\d{6}-\d+$/i.test(t))lot=t.toUpperCase();
   if(!lot){show('err','공정이동표 QR이 아닙니다.<br><small>'+esc(t)+'</small>');setTimeout(()=>busy=false,1500);return}
   try{navigator.vibrate&&navigator.vibrate(80)}catch(e){}
@@ -204,6 +205,6 @@ $('saveBtn').onclick=async()=>{
   }catch(e){show('err','등록 실패: '+esc(e.message||e));$('saveBtn').disabled=false}};
 $('nextBtn').onclick=()=>{hideMsg();$('lotCard').classList.add('hide');$('nextRow').classList.add('hide');$('lotIn').value='';window.scrollTo(0,0);startCam()};
 
-const qp=new URLSearchParams(location.search).get('lot');if(qp)loadLot(qp.toUpperCase(),'');
+const qp=new URLSearchParams(location.search).get('lot');if(qp)loadLot(qp.toUpperCase(),location.href);
 </script>
 </body></html>
