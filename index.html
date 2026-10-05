@@ -1174,7 +1174,7 @@ function makeView(p){
     const f=document.createElement('iframe');f.id='view_'+p.id;
     f.setAttribute('allow','camera');  /* QR스캔 등 iframe 안 카메라 허용 */
     f.srcdoc=(window.__SCREENS&&window.__SCREENS[p.file])||('<p style="padding:20px;font-family:sans-serif">'+p.file+' 화면이 이 파일에 없습니다.</p>');
-    f.addEventListener('load',()=>injectCtx(f));
+    f.addEventListener('load',()=>{injectCtx(f);setTimeout(()=>{try{window.__mobFit&&window.__mobFit()}catch(e){}},0)});
     stage.appendChild(f);
   }else{
     const d=el('div','placeholder',`<div class="ph"><h1>${esc(p.title)}</h1><p>${esc(p.mod||'')} ${p.sec?'› '+esc(p.sec):''}</p><div class="card" style="max-width:520px">이 화면은 아직 만들어지지 않았습니다.<br><br><code>${esc(p.id)}.html</code> 파일을 만들면 이 자리에 표시됩니다.</div></div>`);
@@ -1184,6 +1184,7 @@ function makeView(p){
 function swapTo(id){
   clearTimeout(vwaitTimer);pendingId=null;VREADY.add(id);vwait.classList.remove('on');
   stage.querySelectorAll('iframe,.placeholder').forEach(x=>x.classList.toggle('on',x.id==='view_'+id));
+  requestAnimationFrame(()=>{try{window.__mobFit&&window.__mobFit()}catch(e){}});
 }
 function renderStage(){
   for(const p of openTabs.values())makeView(p);
@@ -1895,35 +1896,72 @@ window.MES_EXT=window.MES_EXT||{list:[],around(name,fn,who){const prev=window[na
   setTimeout(fix,300);
 })();
 </script>
-<script id="mobShellJs">/* 2026-10-06 모바일: 활성 화면(iframe) 높이를 내용에 맞추고, 보이는 위치를 화면에 알림 */
-(function(){const mq=matchMedia('(max-width:900px)');let last=null;
+<script id="mobShellJs">/* 2026-10-06 모바일 스크롤 안정화: iframe 높이는 내용 변경 때만 동기화, 터치 중 강제 레이아웃 제거 */
+(function(){
+ const mq=matchMedia('(max-width:900px)');
+ let last=null,fitRaf=0,visRaf=0,ro=null,roFrame=null;
  const act=()=>document.querySelector('.stage iframe.on');
- function vis(){const f=act();if(!f||!mq.matches)return;let d;try{d=f.contentDocument}catch(e){return}if(!d||!d.documentElement)return;
-  const r=f.getBoundingClientRect(),tb=document.querySelector('.tabs'),hb=tb?Math.max(0,tb.getBoundingClientRect().bottom):0,top=Math.max(r.top,hb),vt=Math.max(0,top-r.top),vh=Math.min(innerHeight-top,r.height-vt);
-  d.documentElement.style.setProperty('--vt',Math.round(vt)+'px');d.documentElement.style.setProperty('--vh',Math.max(240,Math.round(vh))+'px')}
- function fit(){const f=act(),tp=document.querySelector('.top'),tb=document.querySelector('.tabs');if(!mq.matches){if(f)f.style.removeProperty('--fh');if(tb)tb.style.top='';return}if(tp&&tb)tb.style.top=tp.offsetHeight+'px';if(!f)return;
+ const qVis=()=>{if(visRaf)return;visRaf=requestAnimationFrame(()=>{visRaf=0;vis()})};
+ const qFit=()=>{if(fitRaf)return;fitRaf=requestAnimationFrame(()=>{fitRaf=0;fitNow()})};
+ function vis(){
+  const f=act();if(!f||!mq.matches)return;let d;
+  try{d=f.contentDocument}catch(e){return}if(!d||!d.documentElement)return;
+  const r=f.getBoundingClientRect(),tb=document.querySelector('.tabs'),hb=tb?Math.max(0,tb.getBoundingClientRect().bottom):0;
+  const top=Math.max(r.top,hb),vt=Math.max(0,top-r.top),vh=Math.min(innerHeight-top,r.height-vt);
+  const a=Math.round(vt)+'px',b=Math.max(240,Math.round(vh))+'px',root=d.documentElement;
+  if(root.style.getPropertyValue('--vt')!==a)root.style.setProperty('--vt',a);
+  if(root.style.getPropertyValue('--vh')!==b)root.style.setProperty('--vh',b);
+ }
+ function watchSize(f,d){
+  if(roFrame===f)return;
+  try{if(ro)ro.disconnect()}catch(e){}ro=null;roFrame=f;
+  try{
+   const R=(f.contentWindow&&f.contentWindow.ResizeObserver)||ResizeObserver;
+   ro=new R(()=>qFit());
+   if(d.body)ro.observe(d.body);
+   ro.observe(d.documentElement);
+  }catch(e){
+   try{const M=(f.contentWindow&&f.contentWindow.MutationObserver)||MutationObserver;ro=new M(()=>qFit());ro.observe(d.documentElement,{childList:true,subtree:true,attributes:true})}catch(x){}
+  }
+ }
+ function fitNow(){
+  const f=act(),tp=document.querySelector('.top'),tb=document.querySelector('.tabs');
+  if(!mq.matches){if(f)f.style.removeProperty('--fh');if(tb)tb.style.top='';return}
+  if(tp&&tb)tb.style.top=tp.offsetHeight+'px';if(!f)return;
   if(f!==last){last=f;scrollTo(0,0)}
   let d;try{d=f.contentDocument}catch(e){return}if(!d||!d.body)return;
-  const h=Math.ceil(d.body.getBoundingClientRect().height+(parseFloat(getComputedStyle(d.body).marginTop)||0)+(parseFloat(getComputedStyle(d.body).marginBottom)||0));
-  const cur=parseFloat(f.style.getPropertyValue('--fh'))||0;if(h>0&&Math.abs(h-cur)>2)f.style.setProperty('--fh',h+'px');vis()}
- /* 손가락 위아래 이동을 직접 받아 스크롤 — 일부 휴대폰 브라우저는 iframe 위 스와이프를 바깥 페이지로 넘기지 않음
-    (화면 안 세로 터치는 브라우저가 처리하지 않게 하고(touch-action), 팝업·목록 등 안쪽 스크롤 → 바깥 페이지 순서로 움직임. 좌우·탭·입력은 그대로) */
- function prep(f){let d,w;try{d=f.contentDocument;w=f.contentWindow}catch(e){return}if(!d||!d.documentElement||d.__mobTouch)return;d.__mobTouch=1;
+  const cs=getComputedStyle(d.body);
+  const h=Math.ceil(d.body.getBoundingClientRect().height+(parseFloat(cs.marginTop)||0)+(parseFloat(cs.marginBottom)||0));
+  const cur=parseFloat(f.style.getPropertyValue('--fh'))||0;
+  if(h>0&&Math.abs(h-cur)>2)f.style.setProperty('--fh',h+'px');
+  watchSize(f,d);qVis();
+ }
+ /* iframe 위 세로 스와이프를 부모 페이지로 전달한다.
+    screenY를 사용해 스크롤 중 iframe 위치 변화에 따른 좌표 흔들림/강제 reflow를 막고,
+    preventDefault로 브라우저 기본 세로 스크롤과 수동 스크롤의 중복 실행을 차단한다. */
+ function prep(f){
+  let d,w;try{d=f.contentDocument;w=f.contentWindow}catch(e){return}
+  if(!d||!d.documentElement||d.__mobTouch)return;d.__mobTouch=1;
   const st=d.createElement('style');st.textContent='@media (max-width:900px){html{touch-action:pan-x pinch-zoom}}';(d.head||d.documentElement).appendChild(st);
   const canY=e=>{const s=w.getComputedStyle(e);return /(auto|scroll)/.test(s.overflowY)&&e.scrollHeight>e.clientHeight+1};
   const chain=t=>{const L=[];for(let e=t&&t.nodeType===1?t:t&&t.parentElement;e&&e!==d.documentElement&&e!==d.body;e=e.parentElement)if(canY(e))L.push(e);return L};
-  /* 손가락 위치는 바깥 화면 기준으로 계산 (페이지가 움직이면 iframe 안 좌표도 같이 밀려 떨림 발생) */
-  const Y=t=>t.clientY+f.getBoundingClientRect().top;
-  let vq=0;const visQ=()=>{if(vq)return;vq=requestAnimationFrame(()=>{vq=0;vis()})};
+  const Y=t=>(Number.isFinite(t.screenY)?t.screenY:t.clientY);
   let x0=0,y0=0,ly=0,lock=null,L=[],v=0,tp=0,raf=0;
-  const move=dy=>{for(const e of L){if(!dy)break;const mx=e.scrollHeight-e.clientHeight,nt=Math.max(0,Math.min(mx,e.scrollTop+dy));dy-=nt-e.scrollTop;e.scrollTop=nt}if(dy)window.scrollBy(0,dy);visQ()};
+  const move=dy=>{for(const e of L){if(!dy)break;const mx=e.scrollHeight-e.clientHeight,nt=Math.max(0,Math.min(mx,e.scrollTop+dy));dy-=nt-e.scrollTop;e.scrollTop=nt}if(dy)window.scrollBy(0,dy)};
   d.addEventListener('touchstart',e=>{if(!mq.matches||e.touches.length!==1)return;cancelAnimationFrame(raf);const t=e.touches[0];x0=t.clientX;y0=ly=Y(t);lock=null;L=chain(e.target);v=0;tp=performance.now()},{passive:true});
   d.addEventListener('touchmove',e=>{if(!mq.matches||e.touches.length!==1)return;const t=e.touches[0];
    if(lock===null){const ax=Math.abs(t.clientX-x0),ay=Math.abs(Y(t)-y0);if(ax<6&&ay<6)return;lock=ay>=ax?'y':'x'}if(lock!=='y')return;
-   const yy=Y(t),dy=ly-yy;ly=yy;const now=performance.now();v=0.8*v+0.2*(dy/Math.max(1,now-tp));tp=now;move(dy)},{passive:true});
-  d.addEventListener('touchend',()=>{if(lock!=='y'||Math.abs(v)<0.05)return;let vv=v*16;const step=()=>{move(vv);vv*=0.94;if(Math.abs(vv)>0.5)raf=requestAnimationFrame(step)};raf=requestAnimationFrame(step)},{passive:true});}
- const _fit=fit;fit=function(){_fit();const f=act();if(f&&mq.matches)prep(f)};
- addEventListener('scroll',vis,{passive:true});addEventListener('resize',fit);setInterval(()=>fit(),500);
- window.__mobFit=fit;})();
+   if(e.cancelable)e.preventDefault();const yy=Y(t),dy=ly-yy;ly=yy;const now=performance.now();v=0.8*v+0.2*(dy/Math.max(1,now-tp));tp=now;move(dy)},{passive:false});
+  const inertia=()=>{if(lock!=='y'||Math.abs(v)<0.05)return;let vv=v*16;const step=()=>{move(vv);vv*=0.94;if(Math.abs(vv)>0.5)raf=requestAnimationFrame(step)};raf=requestAnimationFrame(step)};
+  d.addEventListener('touchend',inertia,{passive:true});
+  d.addEventListener('touchcancel',()=>cancelAnimationFrame(raf),{passive:true});
+ }
+ function fit(){qFit();const f=act();if(f&&mq.matches)prep(f)}
+ addEventListener('scroll',qVis,{passive:true});
+ addEventListener('resize',fit,{passive:true});
+ try{mq.addEventListener('change',fit)}catch(e){try{mq.addListener(fit)}catch(x){}}
+ window.__mobFit=fit;
+ fit();setTimeout(fit,120);setTimeout(fit,600);
+})();
 </script></body>
 </html>
