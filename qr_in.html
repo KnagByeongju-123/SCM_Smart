@@ -97,6 +97,20 @@ input.np{cursor:pointer;font-size:20px;font-weight:700;text-align:right;caret-co
     <div class="steps" id="steps"></div>
   </section>
 
+  <section class="card hide" id="shipCard">
+    <h2>🚚 출고 등록</h2>
+    <div class="info" style="margin-bottom:4px">
+      <b>공정</b><span id="sProc" class="big"></span>
+      <b>수량</b><span id="sQty"></span>
+    </div>
+    <label>출고처</label><select id="shipTo"></select>
+    <div class="row">
+      <div><label>출고수량</label><input id="shipQty" class="np" readonly inputmode="none" data-label="출고수량"></div>
+      <div><label>출고일</label><input id="shipDate" type="date"></div>
+    </div>
+    <div style="margin-top:14px"><button class="btn ok" id="shipBtn" style="background:#2c73b4">🚚 출고 등록</button></div>
+  </section>
+
   <section class="card hide" id="inCard">
     <h2>3. 입고수량 등록</h2>
     <div class="info" style="margin-bottom:4px">
@@ -207,7 +221,7 @@ async function loadItem(cd,qr){
     const L=lots.map(l=>({l,a:ps.filter(x=>x.lot_no===l.lot_no&&canPick(x))})).filter(x=>x.a.length);
     $('vItemCd').textContent=cd;$('itemCard').classList.remove('hide');
     if(!L.length){$('itemLots').innerHTML='<div class="small">입고할(미입고) 로트가 없습니다.</div>';$('nextRow').classList.remove('hide');return}
-    $('itemLots').innerHTML=L.map(x=>'<div class="step pick" data-lot="'+esc(x.l.lot_no)+'"><span class="nm"><b>'+esc(x.l.lot_no)+'</b><small>'+x.a.map(s=>N(s.seq)+'공정 '+esc(s.proc_nm)+' · '+esc(s.inout_type==='사내'?'사내':sname(s.site_cd))+' · 미입고 '+pendOf(s)).join('<br>')+'</small></span><span class="tag t-out">입고</span></div>').join('');
+    $('itemLots').innerHTML=L.map(x=>'<div class="step pick" data-lot="'+esc(x.l.lot_no)+'"><span class="nm"><b>'+esc(x.l.lot_no)+'</b><small>'+x.a.map(s=>N(s.seq)+'공정 '+esc(s.proc_nm)+' · '+esc(s.inout_type==='사내'?'사내':sname(s.site_cd))+(canShip(s)?' · 미출고 '+unOf(s):'')+(canIn(s)?' · 미입고 '+pendOf(s):'')).join('<br>')+'</small></span><span class="tag t-out">입고</span></div>').join('');
     $('itemLots').querySelectorAll('.step').forEach(el=>el.onclick=()=>{$('itemCard').classList.add('hide');loadLot(el.dataset.lot,qr)});
     if(L.length===1){$('itemCard').classList.add('hide');loadLot(L[0].l.lot_no,qr)}
   }catch(e){show('err','조회 실패: '+esc(e.message||e))}}
@@ -216,7 +230,7 @@ async function loadItem(cd,qr){
 let CUR=null,SITES={};
 const ST={'대기':['대기','t-wait'],'반출':['발주(가공중)','t-out'],'가공중':['발주(가공중)','t-out'],'본사입고':['입고','t-in'],'완료':['입고확정','t-done']};
 async function loadLot(lot,qr){
-  hideMsg();['inCard','nextRow'].forEach(i=>$(i).classList.add('hide'));const keep=CUR&&CUR.sel&&CUR.sel.proc_id;
+  hideMsg();['inCard','shipCard','nextRow'].forEach(i=>$(i).classList.add('hide'));const keep=CUR&&CUR.sel&&CUR.sel.proc_id;
   try{
     const [lots,ps,mv,sites]=await Promise.all([
       get('prod_lot','select=*&lot_no=eq.'+encodeURIComponent(lot)),
@@ -229,25 +243,34 @@ async function loadLot(lot,qr){
     CUR={lot:l,ps,mv,act,qr,sel:act.find(x=>x.proc_id===keep)||act.find(canIn)||act[0]||null};
     $('vLot').textContent=l.lot_no;$('vItem').textContent=l.item_cd||'';$('vQty').textContent=N(l.lot_qty).toLocaleString();
     $('lotCard').classList.remove('hide');renderSteps();
-    if(!act.length){show('info','이 로트에는 지금 <b>입고할 공정이 없습니다.</b><br><small>발주했는데 아직 덜 들어온(미입고) 공정만 입고 등록할 수 있습니다. 입고확정은 사무실에서 합니다.</small>');$('nextRow').classList.remove('hide');return}
-    if(act.length>1)show('info','입고할 공정이 '+act.length+'개입니다. 아래에서 공정을 선택하세요.');
+    if(!act.length){show('info','이 로트에는 지금 <b>출고·입고할 공정이 없습니다.</b><br><small>미출고가 남은 공정은 출고, 출고됐는데 덜 들어온(미입고) 공정은 입고할 수 있습니다. 입고확정은 사무실에서 합니다.</small>');$('nextRow').classList.remove('hide');return}
+    if(act.length>1)show('info','처리할 공정이 '+act.length+'개입니다. 아래에서 공정을 선택하세요.');
     pick(CUR.sel)
   }catch(e){show('err','조회 실패: '+esc(e.message||e))}}
-const pendOf=x=>Math.max(0,N(x.out_qty)-N(x.in_qty));
+const SH=x=>!x?0:(x.ship_qty==null?N(x.out_qty):N(x.ship_qty));   /* 출고 누계 (옛 자료는 발주 = 출고) */
+const unOf=x=>Math.max(0,N(x.out_qty)-SH(x));                       /* 미출고 */
+const pendOf=x=>Math.max(0,SH(x)-N(x.in_qty));                       /* 미입고 = 출고 − 입고 */
 const canIn=x=>!!x.status&&x.status!=='대기'&&pendOf(x)>0;
-const canPick=canIn;
+const canShip=x=>!!x.status&&x.status!=='대기'&&unOf(x)>0;
+const canPick=x=>canIn(x)||canShip(x);
 /* 가공처별 발주·입고·미입고 (사무실 화면 siteBook 과 같은 계산) */
 function siteBook(p,mv){const bk={},g=c=>bk[c]||(bk[c]={sent:0,recv:0,pend:0});let so=0,ri=0;
   mv.filter(m=>m.proc_id===p.proc_id).forEach(m=>{if(m.move_type==='반출'||m.move_type==='사내투입'){g(m.to_site||p.site_cd).sent+=N(m.move_qty);so+=N(m.move_qty)}
    else if(['본사입고','사내완료','미입고마감','직송입고'].includes(m.move_type)){g(m.move_type==='사내완료'?HOME:(m.from_site||p.site_cd)).recv+=N(m.move_qty);ri+=N(m.move_qty)}});
-  const us=N(p.out_qty)-so,ur=N(p.in_qty)-ri;if(us>0)g(p.site_cd).sent+=us;if(ur>0)g(p.site_cd).recv+=ur;if(!Object.keys(bk).length)g(p.site_cd);
+  const us=SH(p)-so,ur=N(p.in_qty)-ri;if(us>0)g(p.site_cd).sent+=us;if(ur>0)g(p.site_cd).recv+=ur;if(!Object.keys(bk).length)g(p.site_cd);
   Object.values(bk).forEach(v=>v.pend=Math.max(0,v.sent-v.recv));return bk}
 function sname(cd){const s=SITES[cd];return s?s.site_nm:(cd||'')}
 function renderSteps(){
   $('steps').innerHTML=CUR.ps.map(x=>{const s=ST[x.status]||[x.status||'대기','t-wait'],can=CUR.act.includes(x);
-    return '<div class="step'+(can?' pick':'')+(CUR.sel===x?' sel':'')+'" data-id="'+esc(x.proc_id)+'"><span class="no">'+N(x.seq)+'</span><span class="nm"><b>'+esc(x.proc_nm)+'</b><small>'+esc(x.inout_type==='사내'?'사내 가공':sname(x.site_cd))+(x.out_qty!=null?' · 발주 '+N(x.out_qty):'')+(x.in_qty!=null?' · 입고 '+N(x.in_qty):'')+(canIn(x)?' · <b style="color:#d9822b">미입고 '+pendOf(x)+'</b>':'')+'</small></span><span class="tag '+s[1]+'">'+s[0]+'</span></div>'}).join('')||'<div class="small">등록된 가공공정이 없습니다.</div>';
+    return '<div class="step'+(can?' pick':'')+(CUR.sel===x?' sel':'')+'" data-id="'+esc(x.proc_id)+'"><span class="no">'+N(x.seq)+'</span><span class="nm"><b>'+esc(x.proc_nm)+'</b><small>'+esc(x.inout_type==='사내'?'사내 가공':sname(x.site_cd))+(x.out_qty!=null?' · 발주 '+N(x.out_qty):'')+(x.in_qty!=null?' · 입고 '+N(x.in_qty):'')+(canShip(x)?' · <b style="color:#2c73b4">미출고 '+unOf(x)+'</b>':'')+(canIn(x)?' · <b style="color:#d9822b">미입고 '+pendOf(x)+'</b>':'')+'</small></span><span class="tag '+s[1]+'">'+s[0]+'</span></div>'}).join('')||'<div class="small">등록된 가공공정이 없습니다.</div>';
   $('steps').querySelectorAll('.step.pick').forEach(el=>el.onclick=()=>pick(CUR.ps.find(x=>x.proc_id===el.dataset.id)))}
 function pick(p){if(!p)return;CUR.sel=p;renderSteps();
+  /* 출고 카드 */
+  const sc=$('shipCard');if(canShip(p)){$('sProc').textContent=N(p.seq)+'공정 · '+(p.proc_nm||'');$('sQty').textContent='발주 '+N(p.out_qty).toLocaleString()+' · 출고 '+SH(p).toLocaleString()+' · 미출고 '+unOf(p).toLocaleString();
+   const ss=Object.values(SITES).filter(s=>s.site_cd===HOME||(s.site_type==='외주'&&s.use_yn!==false));
+   $('shipTo').innerHTML=ss.map(s=>'<option value="'+esc(s.site_cd)+'"'+(s.site_cd===p.site_cd?' selected':'')+'>'+esc(s.site_cd===HOME?'🏠 사내 가공':s.site_nm)+'</option>').join('');
+   $('shipQty').value=unOf(p);$('shipDate').value=today();$('shipBtn').disabled=false;sc.classList.remove('hide')}else sc.classList.add('hide');
+  if(!canIn(p)){$('inCard').classList.add('hide');setTimeout(()=>sc.scrollIntoView({behavior:'smooth',block:'start'}),50);return}
   const nm=c=>c===HOME?'사내 가공':sname(c),bk=Object.entries(siteBook(p,CUR.mv)).filter(([c,v])=>v.pend>0);
   $('vProc').textContent=N(p.seq)+'공정 · '+(p.proc_nm||'');$('vOut').textContent=N(p.out_qty).toLocaleString()+' · 기입고 '+N(p.in_qty).toLocaleString()+' · 미입고 '+pendOf(p).toLocaleString();
   if(bk.length>1){$('vSite').innerHTML='<select id="fromSel">'+bk.map(([c,v])=>'<option value="'+esc(c)+'" data-p="'+v.pend+'">'+esc(nm(c))+' — 미입고 '+v.pend+'</option>').join('')+'</select>';
@@ -302,18 +325,39 @@ $('saveBtn').onclick=async()=>{
     $('inCard').classList.add('hide');$('nextRow').classList.remove('hide');
     return loadLot(p.lot_no,CUR.qr).then(()=>{show('ok','✔ <b>'+esc(p.lot_no)+'</b> '+N(p.seq)+'공정 '+esc(p.proc_nm||'')+' 입고 등록 완료<br>입고 '+q.toLocaleString()+(ng?' · 불량 '+ng:'')+'<br><small>입고확정은 사무실에서 합니다.</small>');$('nextRow').classList.remove('hide')});
   }catch(e){show('err','등록 실패: '+esc(e.message||e));$('saveBtn').disabled=false}};
-$('nextBtn').onclick=()=>{hideMsg();$('lotCard').classList.add('hide');$('itemCard').classList.add('hide');$('nextRow').classList.add('hide');$('lotIn').value='';window.scrollTo(0,0);startCam()};
+$('nextBtn').onclick=()=>{hideMsg();$('lotCard').classList.add('hide');$('shipCard').classList.add('hide');$('itemCard').classList.add('hide');$('nextRow').classList.add('hide');$('lotIn').value='';window.scrollTo(0,0);startCam()};
+
+/* ── 출고 등록 (사무실 [출고]와 같은 처리) ── */
+$('shipBtn').onclick=async()=>{
+  const p=CUR&&CUR.sel;if(!p||!canShip(p))return;
+  const q=N($('shipQty').value),to=$('shipTo').value||p.site_cd,dt=$('shipDate').value||today();
+  if(q<=0)return alert('출고수량을 입력하세요.');
+  if(q>unOf(p))return alert('출고수량('+q+')이 미출고('+unOf(p)+')보다 많습니다.\n더 보내려면 사무실에서 [추가발주] 하세요.');
+  if(!WHO){setWho();if(!WHO)return}
+  if(!confirm(p.lot_no+' · '+N(p.seq)+'공정 '+(p.proc_nm||'')+'\n'+(to===HOME?'사내':sname(to))+' 로 출고 '+q+' 등록할까요?'))return;
+  $('shipBtn').disabled=true;
+  try{
+    const guard=p.ship_qty==null?'is.null':'eq.'+N(p.ship_qty);
+    const upd=await api('lot_process?proc_id=eq.'+encodeURIComponent(p.proc_id)+'&ship_qty='+guard,{method:'PATCH',headers:{Prefer:'return=representation'},
+      body:JSON.stringify({ship_qty:SH(p)+q,status:'반출',done_date:null,confirm_yn:false,confirm_by:null,confirm_date:null,updated_at:nowIso(),updated_by:WHO})});
+    if(!upd||!upd.length){show('err','그 사이 다른 곳에서 출고 처리되었습니다. 다시 조회했으니 확인 후 등록하세요.');return loadLot(p.lot_no,CUR.qr)}
+    await api('lot_move',{method:'POST',headers:{Prefer:'return=minimal'},body:JSON.stringify([{move_no:mvNo(),lot_no:p.lot_no,proc_id:p.proc_id,move_type:to===HOME?'사내투입':'반출',
+      from_site:HOME,to_site:to,move_qty:q,move_date:dt,worker:WHO,scan_method:'QR',scan_qr:CUR.qr||null,scan_site_cd:HOME,seq:N(p.seq),created_at:nowIso(),created_by:WHO,updated_at:nowIso(),updated_by:WHO}])});
+    await updLotQR(p,upd[0]);
+    try{navigator.vibrate&&navigator.vibrate([60,40,60])}catch(e){}
+    return loadLot(p.lot_no,CUR.qr).then(()=>{show('ok','✔ <b>'+esc(p.lot_no)+'</b> '+N(p.seq)+'공정 '+esc(p.proc_nm||'')+' 출고 '+q.toLocaleString()+' → '+esc(to===HOME?'사내':sname(to)));$('nextRow').classList.remove('hide')});
+  }catch(e){show('err','출고 실패: '+esc(e.message||e));$('shipBtn').disabled=false}};
 
 /* ── 숫자 입력 팝업 (현장용 큰 버튼) ── */
 let NP=null;
 function npShow(){const v=NP.buf;$('npVal').textContent=v===''?'0':Number(v).toLocaleString();$('npVal').classList.toggle('ph',v==='')}
 function openPad(inp){
-  const p=CUR&&CUR.sel,pend=p?pendOf(p):0,isNg=inp.id==='ngQty',iq=N($('inQty').value);
+  const p=CUR&&CUR.sel,isShip=inp.id==='shipQty',pend=p?(isShip?unOf(p):pendOf(p)):0,isNg=inp.id==='ngQty',iq=N($('inQty').value);
   NP={inp,buf:'',first:true};
   $('npTitle').textContent=inp.dataset.label;
-  $('npHint').textContent=isNg?'입고수량 '+iq.toLocaleString()+' 중':'미입고 '+pend.toLocaleString();
+  $('npHint').textContent=isNg?'입고수량 '+iq.toLocaleString()+' 중':(isShip?'미출고 ':'미입고 ')+pend.toLocaleString();
   const q=isNg?[0]:[...new Set([pend,N(inp.value)].filter(x=>x>0))];
-  $('npQuick').innerHTML=q.map(x=>'<button data-q="'+x+'">'+(isNg?'불량 없음 (0)':(x===pend?'미입고 전량 ':'')+x.toLocaleString())+'</button>').join('');
+  $('npQuick').innerHTML=q.map(x=>'<button data-q="'+x+'">'+(isNg?'불량 없음 (0)':(x===pend?(isShip?'미출고 전량 ':'미입고 전량 '):'')+x.toLocaleString())+'</button>').join('');
   $('npQuick').querySelectorAll('button').forEach(b=>b.onclick=()=>{inp.value=b.dataset.q;closePad()});
   NP.buf=String(N(inp.value)||'');npShow();$('npBg').classList.add('on')}
 function closePad(){$('npBg').classList.remove('on');NP=null;exShow()}

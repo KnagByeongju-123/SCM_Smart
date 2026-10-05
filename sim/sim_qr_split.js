@@ -51,7 +51,10 @@ async function win(seq){await reload();OF.openWin(LOT,seq);await wait(50);return
 const set=(d,id,v)=>{const e=d.getElementById(id);if(!e)throw new Error('입력칸 없음: '+id);e.value=v;if(e.onchange)e.onchange()};
 async function click(d,id){const b=d.getElementById(id);if(!b||b.disabled)throw new Error('버튼 사용불가: '+id);b.onclick();await wait(300)}
 const O={
- order:async(seq,site,q,due)=>{const d=await win(seq);set(d,'w_site',site);set(d,'w_oqty',q);if(due)set(d,'w_due',due);await click(d,'w_order')},
+ order:async(seq,site,q,due,o={})=>{const d=await win(seq);set(d,'w_site',site);set(d,'w_oqty',q);if(due)set(d,'w_due',due);if(o.noShip)d.getElementById('w_shipnow').checked=false;await click(d,'w_order')},
+ ship:async(seq,q,to)=>{const d=await win(seq);if(to)set(d,'w_ssite',to);set(d,'w_sq2',q);await click(d,'w_ship')},
+ shipCancel:async(seq)=>{const d=await win(seq);await click(d,'w_shipc')},
+ addOrderNoShip:async(seq,site,q)=>{const d=await win(seq);set(d,'w_asite',site);set(d,'w_aqty',q);d.getElementById('w_ashipnow').checked=false;await click(d,'w_add')},
  addOrder:async(seq,site,q)=>{const d=await win(seq);set(d,'w_asite',site);set(d,'w_aqty',q);await click(d,'w_add')},
  in:async(seq,q,ng=0,o={})=>{const d=await win(seq);set(d,'w_iqty',q);set(d,'w_ng',ng);if(ng&&!o.noCause){set(d,'w_cause','가공');set(d,'w_act','폐기')}if(o.eq){set(d,'w_eq',o.eq);set(d,'w_ws','2026-10-05T08:00');set(d,'w_we','2026-10-05T12:00')}await click(d,'w_in')},
  close:async(seq,q,why='분실')=>{const d=await win(seq);set(d,'w_cq',q);set(d,'w_cwhy',why);await click(d,'w_close')},
@@ -75,6 +78,11 @@ async function QR(q,ng=0,o={}){const w=o.win||await qrOpen(),d=w.document;
  if(o.eq){d.getElementById('equip').value=o.eq;d.getElementById('wStart').value='2026-10-05T13:00';d.getElementById('wEnd').value='2026-10-05T17:30'}
  d.getElementById('saveBtn').onclick();await wait(200);
  return {ok:/완료/.test(d.getElementById('msg').textContent),msg:d.getElementById('msg').textContent.replace(/\s+/g,' ').slice(0,90),...info}}
+async function QRship(q,o={}){const w=await qrOpen(),d=w.document;
+ if(o.seq){const st=d.querySelector('.step.pick[data-id="'+LOT+'-P'+o.seq+'"]');if(!st)return {ok:false,msg:'선택불가'};st.onclick();await wait(30)}
+ if(d.getElementById('shipCard').classList.contains('hide'))return {ok:false,msg:'출고 카드 없음',inCard:!d.getElementById('inCard').classList.contains('hide')};
+ const def=d.getElementById('shipQty').value;if(o.to)d.getElementById('shipTo').value=o.to;d.getElementById('shipQty').value=q;d.getElementById('shipBtn').onclick();await wait(200);
+ return {ok:/출고 /.test(d.getElementById('msg').textContent)&&/✔/.test(d.getElementById('msg').textContent),def,msg:d.getElementById('msg').textContent.slice(0,80)}}
 async function officeErr(fn){const n=ASK.length;try{await fn()}catch(e){return e.message}const a=ASK.slice(n).find(x=>/^ALERT/.test(x));return a||''}
 /* ── 검사 ── */
 const N=v=>Number(v)||0;let FAIL=0,LINES=[];
@@ -87,9 +95,10 @@ function check(label,exp){const res=[];for(const [k,want] of Object.entries(exp)
   const RC=['본사입고','사내완료','미입고마감','직송입고'],ri=mv(s,RC).reduce((a,m)=>a+N(m.move_qty),0),rn=mv(s,RC).reduce((a,m)=>a+N(m.ng_qty),0);
   if(ri!==N(p.in_qty)){FAIL++;res.push('✗ '+s+'공정 입고 '+N(p.in_qty)+' ≠ 이동기록 '+ri)}
   if(rn!==N(p.ng_qty)){FAIL++;res.push('✗ '+s+'공정 불량 '+N(p.ng_qty)+' ≠ 이동기록 '+rn)}
-  {const so=mv(s,['반출','사내투입']).reduce((a,m)=>a+N(m.move_qty),0);if(so!==N(p.out_qty)){FAIL++;res.push('✗ '+s+'공정 발주 '+N(p.out_qty)+' ≠ 반출·사내투입 기록 '+so)}}});
+  {const so=mv(s,['반출','사내투입']).reduce((a,m)=>a+N(m.move_qty),0),sh=p.ship_qty==null?N(p.out_qty):N(p.ship_qty);if(so!==sh){FAIL++;res.push('✗ '+s+'공정 출고 '+sh+' ≠ 반출·사내투입 기록 '+so)}
+   if(sh>N(p.out_qty)){FAIL++;res.push('✗ '+s+'공정 출고 '+sh+' > 발주 '+N(p.out_qty))}if(N(p.in_qty)>sh){FAIL++;res.push('✗ '+s+'공정 입고 '+N(p.in_qty)+' > 출고 '+sh)}}});
  LINES.push((res.length?'  ❌ ':'  ✅ ')+label+(res.length?'\n     '+res.join('\n     '):''))}
-const show=()=>[1,2,3].map(s=>{const p=lp(s);return s+'.'+p.proc_nm+'['+p.status+'] 발주'+N(p.out_qty)+' 입고'+N(p.in_qty)+(N(p.ng_qty)?'(불'+N(p.ng_qty)+')':'')}).join('  ');
+const show=()=>[1,2,3].map(s=>{const p=lp(s);return s+'.'+p.proc_nm+'['+p.status+'] 발주'+N(p.out_qty)+(p.ship_qty!=null&&N(p.ship_qty)!==N(p.out_qty)?' 출고'+N(p.ship_qty):'')+' 입고'+N(p.in_qty)+(N(p.ng_qty)?'(불'+N(p.ng_qty)+')':'')}).join('  ');
 async function scenario(name,fn){seed();ASK=[];LINES=[];await office();console.log('\n■ '+name);
  try{await fn()}catch(e){FAIL++;LINES.push('  ❌ 예외: '+e.message)}LINES.forEach(l=>console.log(l));console.log('   ⇒ '+show());
  const a=ASK.filter(x=>!/진행할까요|등록할까요|발행할까요/.test(x));if(a.length)console.log('   (확인창) '+[...new Set(a)].join(' / '))}
@@ -195,4 +204,27 @@ await scenario('R. [H] 사내 실적 — QR·사무실 사내완료에 작업자
 await scenario('S. [J] 입고확정 후 수량 수정 금지',async()=>{
  await O.order(1,'V026',600);await QR(600);check('확정 전 수량저장 '+await O.btn(1,'w_qty'),{ok:()=>true});await O.confirm(1);
  const s=await O.btn(1,'w_qty');check('확정 후 수량저장 버튼 '+s,{ok:()=>s!=='사용가능'})});
+await scenario('T1. [1] 분할 출고 — 600 발주(바로출고 끔) → QR 출고 300 → QR 입고 300 → 사무실 출고 300 → QR 입고 300',async()=>{
+ await O.order(1,'V026',600,null,{noShip:true});check('발주만 (출고 0, 이동기록 없음)',{'lp.1.out_qty':600,'lp.1.ship_qty':0,ok:()=>mv(1,['반출']).length===0});
+ let r=await QR(100);check('출고 전 QR 입고 → '+(r.ok?'저장됨(문제)':'입고 대상 아님'),{ok:()=>!r.ok});
+ let s=await QRship(300);check('QR 출고 300 (기본값 '+s.def+')',{ok:()=>s.ok&&s.def==='600','lp.1.ship_qty':300});
+ r=await QR(300);check('QR 입고 300 (기본값 '+r.def+')',{ok:()=>r.ok&&r.def==='300','lp.1.in_qty':300});
+ await O.ship(1,300);check('사무실 출고 300',{'lp.1.ship_qty':600});r=await QR(300);check('QR 입고 300',{'lp.1.in_qty':600});
+ await O.confirm(1);const a=await O.avail(2);check('확정 → 2공정 발주가능 '+a,{ok:()=>a===600})});
+await scenario('T2. [1] 입고 한도 = 출고 − 입고 (발주 600, 출고 300 에서 400 입고 시도)',async()=>{
+ await O.order(1,'V026',600,null,{noShip:true});await O.ship(1,300);const r=await QR(400);check('QR 400 → '+(r.ok?'저장됨(문제)':'막힘'),{ok:()=>!r.ok,'lp.1.in_qty':'undefined'});
+ const e=await officeErr(()=>O.in(1,400));check('사무실 400 → '+(e?'막힘':'저장됨(문제)'),{ok:()=>!!e})});
+await scenario('T3. [1] 발주취소 — 미출고분부터 (600 발주, 200 출고 → 취소하면 발주 200)',async()=>{
+ await O.order(1,'V026',600,null,{noShip:true});await O.ship(1,200);await O.cancelOrder(1);check('미출고 400 취소 → 발주 200',{'lp.1.out_qty':200,'lp.1.ship_qty':200,'lp.1.status':'반출'});
+ await O.cancelOrder(1);check('다시 취소 → 전체 발주취소',{'lp.1.status':'대기',ok:()=>mv(1,['반출']).length===0})});
+await scenario('T4. [1] 출고취소 — 200+200 출고, 100 입고 → 마지막 200 취소, 한 번 더는 막힘',async()=>{
+ await O.order(1,'V026',600,null,{noShip:true});await O.ship(1,200);await O.ship(1,200);await QR(100);await O.shipCancel(1);
+ check('마지막 출고 200 취소',{'lp.1.ship_qty':200,'lp.1.out_qty':600});const e=await officeErr(()=>O.shipCancel(1));check('한 번 더 취소(출고 0 < 입고 100) → '+(e?'막힘':'취소됨(문제)'),{ok:()=>!!e,'lp.1.ship_qty':200})});
+await scenario('T5. [1] 추가발주(바로출고 끔) → 다른 업체로 출고 → 업체별 입고',async()=>{
+ await O.order(1,'V026',400);await O.addOrderNoShip(1,'V026',200);check('추가발주 200 미출고',{'lp.1.out_qty':600,'lp.1.ship_qty':400});
+ await O.ship(1,200,'V001');const r=await QR(200,0,{site:'V001'});check('QR 입고처 '+r.sites.join(' / '),{ok:()=>r.sites.length===2,'lp.1.in_qty':200})});
+await scenario('T6. [1] 사내 공정 분할 투입 — 600 중 300 사내투입 후 QR 사내완료, 나머지 투입',async()=>{
+ await O.order(1,'V026',600);await QR(600);await O.confirm(1);await O.order(2,'V009',600);await QR(600,0,{seq:2});await O.confirm(2);
+ await O.order(3,HOME,600,null,{noShip:true});const s=await QRship(300,{seq:3});check('QR 사내투입 300',{ok:()=>s.ok&&mv(3,['사내투입']).length===1,'lp.3.ship_qty':300});
+ await QR(300,0,{seq:3});await QRship(300,{seq:3});await QR(300,0,{seq:3});await O.confirm(3);check('사내 600 완료 → 가공완료',{'lp.3.status':'완료','lot.status':'가공완료'})});
 console.log('\n'+(FAIL?'❌ 실패 '+FAIL+'건':'✅ 전체 통과'));process.exit(FAIL?1:0)})();
