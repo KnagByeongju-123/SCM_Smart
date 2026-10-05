@@ -1912,12 +1912,15 @@ window.MES_EXT=window.MES_EXT||{list:[],around(name,fn,who){const prev=window[na
   const st=d.createElement('style');st.textContent='@media (max-width:900px){html{touch-action:pan-x pinch-zoom}}';(d.head||d.documentElement).appendChild(st);
   const canY=e=>{const s=w.getComputedStyle(e);return /(auto|scroll)/.test(s.overflowY)&&e.scrollHeight>e.clientHeight+1};
   const chain=t=>{const L=[];for(let e=t&&t.nodeType===1?t:t&&t.parentElement;e&&e!==d.documentElement&&e!==d.body;e=e.parentElement)if(canY(e))L.push(e);return L};
+  /* 손가락 위치는 바깥 화면 기준으로 계산 (페이지가 움직이면 iframe 안 좌표도 같이 밀려 떨림 발생) */
+  const Y=t=>t.clientY+f.getBoundingClientRect().top;
+  let vq=0;const visQ=()=>{if(vq)return;vq=requestAnimationFrame(()=>{vq=0;vis()})};
   let x0=0,y0=0,ly=0,lock=null,L=[],v=0,tp=0,raf=0;
-  const move=dy=>{for(const e of L){if(!dy)break;const mx=e.scrollHeight-e.clientHeight,nt=Math.max(0,Math.min(mx,e.scrollTop+dy));dy-=nt-e.scrollTop;e.scrollTop=nt}if(dy)window.scrollBy(0,dy);vis()};
-  d.addEventListener('touchstart',e=>{if(!mq.matches||e.touches.length!==1)return;cancelAnimationFrame(raf);const t=e.touches[0];x0=t.clientX;y0=ly=t.clientY;lock=null;L=chain(e.target);v=0;tp=performance.now()},{passive:true});
+  const move=dy=>{for(const e of L){if(!dy)break;const mx=e.scrollHeight-e.clientHeight,nt=Math.max(0,Math.min(mx,e.scrollTop+dy));dy-=nt-e.scrollTop;e.scrollTop=nt}if(dy)window.scrollBy(0,dy);visQ()};
+  d.addEventListener('touchstart',e=>{if(!mq.matches||e.touches.length!==1)return;cancelAnimationFrame(raf);const t=e.touches[0];x0=t.clientX;y0=ly=Y(t);lock=null;L=chain(e.target);v=0;tp=performance.now()},{passive:true});
   d.addEventListener('touchmove',e=>{if(!mq.matches||e.touches.length!==1)return;const t=e.touches[0];
-   if(lock===null){const ax=Math.abs(t.clientX-x0),ay=Math.abs(t.clientY-y0);if(ax<6&&ay<6)return;lock=ay>=ax?'y':'x'}if(lock!=='y')return;
-   const dy=ly-t.clientY;ly=t.clientY;const now=performance.now();v=0.8*v+0.2*(dy/Math.max(1,now-tp));tp=now;move(dy)},{passive:true});
+   if(lock===null){const ax=Math.abs(t.clientX-x0),ay=Math.abs(Y(t)-y0);if(ax<6&&ay<6)return;lock=ay>=ax?'y':'x'}if(lock!=='y')return;
+   const yy=Y(t),dy=ly-yy;ly=yy;const now=performance.now();v=0.8*v+0.2*(dy/Math.max(1,now-tp));tp=now;move(dy)},{passive:true});
   d.addEventListener('touchend',()=>{if(lock!=='y'||Math.abs(v)<0.05)return;let vv=v*16;const step=()=>{move(vv);vv*=0.94;if(Math.abs(vv)>0.5)raf=requestAnimationFrame(step)};raf=requestAnimationFrame(step)},{passive:true});}
  const _fit=fit;fit=function(){_fit();const f=act();if(f&&mq.matches)prep(f)};
  addEventListener('scroll',vis,{passive:true});addEventListener('resize',fit);setInterval(()=>fit(),500);
