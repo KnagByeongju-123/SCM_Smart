@@ -1,6 +1,12 @@
 /* SCM Smart — 사내기준 외주 분할입고 QR 시뮬레이션
  * 실행: cd sim && npm i jsdom && node sim_qr_split.js
- * 사무실 화면(index.html › 사내외가공진행)과 QR 입고(qr_in.html)를 같은 가짜 DB에 붙여 실제 코드로 돌린다. */
+ * 사무실 화면(index.html › 사내외가공진행)과 QR 입고(qr_in.html)를 같은 가짜 DB에 붙여 실제 코드로 돌린다.
+ *
+ * [입고 기준 — 2026-10-05 확정]
+ *  1. 초과입고 금지: 공정 미입고(발주−입고) 또는 업체별 미입고를 넘는 입고는 QR·사무실 모두 막는다. 더 들어오면 추가발주 후 입고.
+ *  2. 다음 공정 발주: 입고된 양품(입고−불량)만큼 바로 가능 (확정 전이라도 분할 흐름 허용).
+ *  3. 확정 후 추가입고: 확정이 풀리고(본사입고) 다시 입고확정해야 한다.
+ *  4. 입고확정: 사무실과 QR 화면 모두 가능. 미입고가 남아 있으면 확정 전에 경고. */
 const {JSDOM,VirtualConsole}=require('jsdom');const fs=require('fs'),path=require('path');
 const ROOT=path.join(__dirname,'..');
 /* ── 화면 소스 ── */
@@ -46,6 +52,7 @@ const O={
  order:async(seq,site,q)=>{const d=await win(seq);set(d,'w_site',site);set(d,'w_oqty',q);await click(d,'w_order')},
  addOrder:async(seq,site,q)=>{const d=await win(seq);set(d,'w_asite',site);set(d,'w_aqty',q);await click(d,'w_add')},
  in:async(seq,q,ng=0)=>{const d=await win(seq);set(d,'w_iqty',q);set(d,'w_ng',ng);await click(d,'w_in')},
+ addIn:async(seq,q,ng=0)=>{const d=await win(seq);set(d,'w_aiq',q);set(d,'w_ang',ng);const b=d.getElementById('w_ain');if(!b||b.disabled)throw new Error('버튼 사용불가: w_ain');await b.onclick();await wait(300)},
  confirm:async(seq)=>{const d=await win(seq);await click(d,'w_conf')},
  cancelIn:async(seq)=>{const d=await win(seq);await click(d,'w_icancel')},
  avail:async(seq)=>{await reload();const d=await win(seq);const x=d.getElementById('w_oqty');return x?Number(x.value):null}};
@@ -58,6 +65,10 @@ async function QR(q,ng=0,o={}){const w=o.win||await qrOpen(),d=w.document;
  if(o.site){const s=d.getElementById('fromSel');s.value=o.site;s.onchange()}
  d.getElementById('inQty').value=q;d.getElementById('ngQty').value=ng;d.getElementById('saveBtn').onclick();await wait(200);
  return {ok:/완료/.test(d.getElementById('msg').textContent),msg:d.getElementById('msg').textContent.replace(/\s+/g,' ').slice(0,90),...info}}
+async function QRconf(seq){const w=await qrOpen(),d=w.document;const st=d.querySelector('.step.pick[data-id="'+LOT+'-P'+seq+'"]');if(!st)return {ok:false,msg:'공정 '+seq+' 선택불가'};st.onclick();await wait(30);
+ if(d.getElementById('confCard').classList.contains('hide'))return {ok:false,msg:'확정 카드 없음'};const warn=d.getElementById('cWarn').textContent;
+ d.getElementById('confBtn').onclick();await wait(200);return {ok:/입고확정 —/.test(d.getElementById('msg').textContent),warn,msg:d.getElementById('msg').textContent.replace(/\s+/g,' ').slice(0,90)}}
+async function officeErr(fn){const n=ASK.length;try{await fn()}catch(e){return e.message}const a=ASK.slice(n).find(x=>/^ALERT/.test(x));return a||''}
 /* ── 검사 ── */
 const N=v=>Number(v)||0;let FAIL=0,LINES=[];
 const lp=s=>DB.lot_process.find(x=>x.seq==s);
@@ -106,9 +117,24 @@ await scenario('E. 동시입고: QR 화면 열어둔 사이 사무실이 100 입
  await O.order(1,'V026',600);const w=await qrOpen();await O.in(1,100);
  const r=await QR(200,0,{win:w});check('QR 저장 거부 → '+(r.ok?'저장됨(문제)':'거부'),{ok:()=>!r.ok,'lp.1.in_qty':100});
  const r2=await QR(200);check('다시 조회 후 200 입고 (기본값 '+r2.def+')',{'lp.1.in_qty':300,ok:()=>r2.def==='500'})});
-await scenario('F. 초과입고: 발주 600 인데 QR 650 입력',async()=>{
- await O.order(1,'V026',600);const r=await QR(650);check('초과 입고 처리 ('+(r.ok?'확인창 후 등록됨':'거부')+')',{ok:()=>true});
- check('미입고 음수 없음 확인',{ok:()=>N(lp(1).out_qty)-N(lp(1).in_qty)<0?(LINES.push('     ⚠ 입고 '+lp(1).in_qty+' > 발주 '+lp(1).out_qty+' 허용됨 — 기준 필요'),true):true})});
+await scenario('F. [기준] 초과입고 막기 — QR 650 / 사무실 추가입고 300(미입고 200)',async()=>{
+ await O.order(1,'V026',600);let r=await QR(650);check('QR 650 → '+(r.ok?'저장됨(문제)':'막힘'),{ok:()=>!r.ok,'lp.1.in_qty':'undefined'});
+ await QR(400);await O.addOrder(1,'V001',0).catch(()=>{});
+ const e=await officeErr(()=>O.addIn(1,300));check('사무실 입고 300 (미입고 200) → '+(e?'막힘: '+e.slice(0,60):'저장됨(문제)'),{ok:()=>!!e,'lp.1.in_qty':400});
+ await O.addIn(1,200);check('사무실 추가입고 정상 200',{'lp.1.in_qty':600})});
+await scenario('F2. [기준] 업체별 미입고 초과 막기 — 신성 400 + 성광 추가 200, 성광분 250 입력',async()=>{
+ await O.order(1,'V026',400);await O.addOrder(1,'V001',200);
+ const r=await QR(250,0,{site:'V001'});check('성광정밀 250 (미입고 200) → '+(r.ok?'저장됨(문제)':'막힘'),{ok:()=>!r.ok,'lp.1.in_qty':'undefined'})});
+await scenario('J. [기준] QR 입고확정 — 전 공정을 현장 QR로 입고·확정 → 가공완료',async()=>{
+ await O.order(1,'V026',600);await QR(600);let c=await QRconf(1);check('1공정 QR 확정',{ok:()=>c.ok,'lp.1.status':'완료','lp.1.confirm_by':'현장작업자','lot.cur_seq':1});
+ let a=await O.avail(2);check('2공정 발주가능 '+a,{ok:()=>a===600});
+ await O.order(2,'V009',600);await QR(600,10,{seq:2});c=await QRconf(2);check('2공정 불량10 확정 → 양품 590',{'lp.2.status':'완료','lot.remain_qty':590});
+ await O.order(3,HOME,590);await QR(590,0,{seq:3});c=await QRconf(3);check('3공정(사내) 확정 → 로트 가공완료',{'lp.3.status':'완료','lot.status':'가공완료','lot.cur_seq':3,'lot.remain_qty':590})});
+await scenario('K. [기준] 부분 확정 → 나머지 QR 입고 시 확정 해제 → 재확정',async()=>{
+ await O.order(1,'V026',600);await QR(400);let c=await QRconf(1);check('400 상태에서 확정 (경고: '+(c.warn?'미입고 안내 표시':'없음')+')',{ok:()=>c.ok&&!!c.warn,'lp.1.status':'완료','lot.remain_qty':400});
+ await O.order(2,'V009',400);await QR(200,0,{seq:1});check('나머지 200 입고 → 확정 해제',{'lp.1.status':'본사입고','lp.1.confirm_yn':false,'lp.2.status':'반출'});
+ c=await QRconf(1);check('QR 재확정 → 양품 600',{'lp.1.status':'완료'});const a=await O.avail(2);await reload();
+ const ad=OF.document;OF.openWin(LOT,2);await wait(50);const aq=OF.document.getElementById('w_aqty');check('2공정 추가발주 가능 '+(aq?aq.value:'없음'),{ok:()=>aq&&aq.value==='200'})});
 await scenario('G. 사내공정(평면연마) 분할 — 사내투입 300 → QR 사내완료 2회',async()=>{
  await O.order(1,'V026',600);await QR(600);await O.confirm(1);await O.order(2,'V009',600);await QR(600,0,{seq:2});await O.confirm(2);
  await O.order(3,HOME,300);const r=await QR(150,0,{seq:3});await QR(150,0,{seq:3});
