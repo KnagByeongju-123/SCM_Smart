@@ -1906,7 +1906,21 @@ window.MES_EXT=window.MES_EXT||{list:[],around(name,fn,who){const prev=window[na
   let d;try{d=f.contentDocument}catch(e){return}if(!d||!d.body)return;
   const h=Math.ceil(d.body.getBoundingClientRect().height+(parseFloat(getComputedStyle(d.body).marginTop)||0)+(parseFloat(getComputedStyle(d.body).marginBottom)||0));
   const cur=parseFloat(f.style.getPropertyValue('--fh'))||0;if(h>0&&Math.abs(h-cur)>2)f.style.setProperty('--fh',h+'px');vis()}
- addEventListener('scroll',vis,{passive:true});addEventListener('resize',fit);setInterval(fit,500);
+ /* 손가락 위아래 이동을 직접 받아 스크롤 — 일부 휴대폰 브라우저는 iframe 위 스와이프를 바깥 페이지로 넘기지 않음
+    (화면 안 세로 터치는 브라우저가 처리하지 않게 하고(touch-action), 팝업·목록 등 안쪽 스크롤 → 바깥 페이지 순서로 움직임. 좌우·탭·입력은 그대로) */
+ function prep(f){let d,w;try{d=f.contentDocument;w=f.contentWindow}catch(e){return}if(!d||!d.documentElement||d.__mobTouch)return;d.__mobTouch=1;
+  const st=d.createElement('style');st.textContent='@media (max-width:900px){html{touch-action:pan-x pinch-zoom}}';(d.head||d.documentElement).appendChild(st);
+  const canY=e=>{const s=w.getComputedStyle(e);return /(auto|scroll)/.test(s.overflowY)&&e.scrollHeight>e.clientHeight+1};
+  const chain=t=>{const L=[];for(let e=t&&t.nodeType===1?t:t&&t.parentElement;e&&e!==d.documentElement&&e!==d.body;e=e.parentElement)if(canY(e))L.push(e);return L};
+  let x0=0,y0=0,ly=0,lock=null,L=[],v=0,tp=0,raf=0;
+  const move=dy=>{for(const e of L){if(!dy)break;const mx=e.scrollHeight-e.clientHeight,nt=Math.max(0,Math.min(mx,e.scrollTop+dy));dy-=nt-e.scrollTop;e.scrollTop=nt}if(dy)window.scrollBy(0,dy);vis()};
+  d.addEventListener('touchstart',e=>{if(!mq.matches||e.touches.length!==1)return;cancelAnimationFrame(raf);const t=e.touches[0];x0=t.clientX;y0=ly=t.clientY;lock=null;L=chain(e.target);v=0;tp=performance.now()},{passive:true});
+  d.addEventListener('touchmove',e=>{if(!mq.matches||e.touches.length!==1)return;const t=e.touches[0];
+   if(lock===null){const ax=Math.abs(t.clientX-x0),ay=Math.abs(t.clientY-y0);if(ax<6&&ay<6)return;lock=ay>=ax?'y':'x'}if(lock!=='y')return;
+   const dy=ly-t.clientY;ly=t.clientY;const now=performance.now();v=0.8*v+0.2*(dy/Math.max(1,now-tp));tp=now;move(dy)},{passive:true});
+  d.addEventListener('touchend',()=>{if(lock!=='y'||Math.abs(v)<0.05)return;let vv=v*16;const step=()=>{move(vv);vv*=0.94;if(Math.abs(vv)>0.5)raf=requestAnimationFrame(step)};raf=requestAnimationFrame(step)},{passive:true});}
+ const _fit=fit;fit=function(){_fit();const f=act();if(f&&mq.matches)prep(f)};
+ addEventListener('scroll',vis,{passive:true});addEventListener('resize',fit);setInterval(()=>fit(),500);
  window.__mobFit=fit;})();
 </script></body>
 </html>
