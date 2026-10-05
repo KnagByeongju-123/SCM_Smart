@@ -50,7 +50,7 @@ label{display:block;font-size:12.5px;color:var(--sub);margin:10px 0 4px}
 </style>
 </head>
 <body>
-<header><div><h1>📥 공정이동표 QR 입고</h1><small>경일FB · SCM Smart</small></div><button class="btn" id="whoBtn" style="height:34px;font-size:13px">👤 <span id="whoTxt"></span></button></header>
+<header><div><h1>📥 QR 입고</h1><small>경일FB · SCM Smart</small></div><button class="btn" id="whoBtn" style="height:34px;font-size:13px">👤 <span id="whoTxt"></span></button></header>
 <main>
   <div id="msg" class="msg"></div>
 
@@ -62,6 +62,11 @@ label{display:block;font-size:12.5px;color:var(--sub);margin:10px 0 4px}
     </div>
     <label>또는 로트번호 직접 입력</label>
     <div class="row"><input id="lotIn" placeholder="예: PL-261005-001" autocapitalize="characters"><button class="btn" id="lotBtn" style="flex:0 0 80px">조회</button></div>
+  </section>
+
+  <section class="card hide" id="itemCard">
+    <h2>품번 <span id="vItemCd"></span> — 입고할 로트 선택</h2>
+    <div class="steps" id="itemLots"></div>
   </section>
 
   <section class="card hide" id="lotCard">
@@ -135,16 +140,33 @@ $('camBtn').onclick=startCam;
 async function onScan(text){
   if(busy)return;busy=true;
   const t=String(text||'').trim(),p=t.split('|');
-  let lot='';
+  let lot='',item='';
   if(p[0]==='TRAVEL'&&p[1])lot=p[1];
-  else if(/^https?:\/\//i.test(t)){try{lot=(new URL(t).searchParams.get('lot')||'').toUpperCase()}catch(e){}}
+  else if(/^https?:\/\//i.test(t)){try{const u=new URL(t).searchParams;lot=(u.get('lot')||'').toUpperCase();item=u.get('item')||''}catch(e){}}
   else if(/^PL-\d{6}-\d+$/i.test(t))lot=t.toUpperCase();
-  if(!lot){show('err','공정이동표 QR이 아닙니다.<br><small>'+esc(t)+'</small>');setTimeout(()=>busy=false,1500);return}
+  else if(t&&t.length<=40&&!/\s/.test(t))item=t.split('_').pop();   /* 옛 도면 QR(품번 글자) */
+  if(!lot&&!item){show('err','공정이동표·도면 QR이 아닙니다.<br><small>'+esc(t)+'</small>');setTimeout(()=>busy=false,1500);return}
   try{navigator.vibrate&&navigator.vibrate(80)}catch(e){}
   await stopCam();
-  await loadLot(lot,t);busy=false}
+  if(lot)await loadLot(lot,t);else await loadItem(item,t);busy=false}
 $('lotBtn').onclick=()=>{const v=$('lotIn').value.trim().toUpperCase();if(v)loadLot(v,'')};
 $('lotIn').onkeydown=e=>{if(e.key==='Enter')$('lotBtn').click()};
+
+/* ── 품번 QR(가공공정도면): 그 품번의 미입고 로트 목록 → 하나 고르면 입고 ── */
+async function loadItem(cd,qr){
+  hideMsg();['lotCard','inCard','nextRow'].forEach(i=>$(i).classList.add('hide'));
+  try{
+    const lots=await get('prod_lot','select=lot_no,lot_qty,status&item_cd=eq.'+encodeURIComponent(cd)+'&status=neq.종료&order=lot_no');
+    if(!lots.length){$('itemCard').classList.add('hide');show('err','품번 <b>'+esc(cd)+'</b> 의 진행 중인 로트가 없습니다.');return}
+    const ps=await get('lot_process','select=lot_no,seq,proc_nm,site_cd,inout_type,status,out_qty,in_qty&lot_no=in.('+lots.map(l=>'"'+l.lot_no+'"').join(',')+')&order=seq');
+    if(!Object.keys(SITES).length)(await get('process_site','select=site_cd,site_nm,site_type')).forEach(s=>SITES[s.site_cd]=s);
+    const L=lots.map(l=>({l,a:ps.filter(x=>x.lot_no===l.lot_no&&canIn(x))})).filter(x=>x.a.length);
+    $('vItemCd').textContent=cd;$('itemCard').classList.remove('hide');
+    if(!L.length){$('itemLots').innerHTML='<div class="small">입고할(미입고) 로트가 없습니다.</div>';$('nextRow').classList.remove('hide');return}
+    $('itemLots').innerHTML=L.map(x=>'<div class="step pick" data-lot="'+esc(x.l.lot_no)+'"><span class="nm"><b>'+esc(x.l.lot_no)+'</b><small>'+x.a.map(s=>N(s.seq)+'공정 '+esc(s.proc_nm)+' · '+esc(s.inout_type==='사내'?'사내':sname(s.site_cd))+' · 미입고 '+pendOf(s)).join('<br>')+'</small></span><span class="tag t-out">입고</span></div>').join('');
+    $('itemLots').querySelectorAll('.step').forEach(el=>el.onclick=()=>{$('itemCard').classList.add('hide');loadLot(el.dataset.lot,qr)});
+    if(L.length===1){$('itemCard').classList.add('hide');loadLot(L[0].l.lot_no,qr)}
+  }catch(e){show('err','조회 실패: '+esc(e.message||e))}}
 
 /* ── 로트 조회 ── */
 let CUR=null,SITES={};
@@ -222,8 +244,8 @@ $('saveBtn').onclick=async()=>{
     $('inCard').classList.add('hide');$('nextRow').classList.remove('hide');
     return loadLot(p.lot_no,CUR.qr).then(()=>{show('ok','✔ <b>'+esc(p.lot_no)+'</b> '+N(p.seq)+'공정 '+esc(p.proc_nm||'')+' 입고 등록 완료<br>입고 '+q.toLocaleString()+(ng?' · 불량 '+ng:'')+(CUR.act.length?'<br><small>아직 미입고가 남은 공정이 있습니다.</small>':''));$('nextRow').classList.remove('hide')});
   }catch(e){show('err','등록 실패: '+esc(e.message||e));$('saveBtn').disabled=false}};
-$('nextBtn').onclick=()=>{hideMsg();$('lotCard').classList.add('hide');$('nextRow').classList.add('hide');$('lotIn').value='';window.scrollTo(0,0);startCam()};
+$('nextBtn').onclick=()=>{hideMsg();$('lotCard').classList.add('hide');$('itemCard').classList.add('hide');$('nextRow').classList.add('hide');$('lotIn').value='';window.scrollTo(0,0);startCam()};
 
-const qp=new URLSearchParams(location.search).get('lot');if(qp)loadLot(qp.toUpperCase(),location.href);
+const QS=new URLSearchParams(location.search),qp=QS.get('lot'),qi=QS.get('item');if(qp)loadLot(qp.toUpperCase(),location.href);else if(qi)loadItem(qi,location.href);
 </script>
 </body></html>
