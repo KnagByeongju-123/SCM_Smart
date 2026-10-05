@@ -108,6 +108,19 @@ input.np{cursor:pointer;font-size:20px;font-weight:700;text-align:right;caret-co
       <div><label>입고수량</label><input id="inQty" class="np" readonly inputmode="none" data-label="입고수량"></div>
       <div><label>불량</label><input id="ngQty" class="np" readonly inputmode="none" value="0" data-label="불량"></div>
     </div>
+    <div id="ngBox" class="hide">
+      <div class="row">
+        <div><label>불량원인 *</label><select id="ngCause"><option value="">선택</option><option>가공</option><option>소재</option><option>취급</option></select></div>
+        <div><label>불량처리 *</label><select id="ngAct"><option value="">선택</option><option>재작업</option><option>폐기</option><option>반품</option></select></div>
+      </div>
+    </div>
+    <div id="inhBox" class="hide">
+      <label>설비 (사내 실적)</label><input id="equip" placeholder="설비명 (자유입력)">
+      <div class="row">
+        <div><label>작업시작</label><input id="wStart" type="datetime-local"></div>
+        <div><label>작업종료</label><input id="wEnd" type="datetime-local"></div>
+      </div>
+    </div>
     <label>입고일</label><input id="inDate" type="date">
     <div style="margin-top:14px"><button class="btn ok" id="saveBtn">✔ 입고 등록</button></div>
     <p class="small" style="margin:8px 0 0">등록하면 이 공정이 '입고' 상태로 바뀌고 사무실 가공진행 화면에 바로 반영됩니다.</p>
@@ -174,7 +187,7 @@ async function onScan(text){
   let lot='',item='';
   if(p[0]==='TRAVEL'&&p[1])lot=p[1];
   else if(/^https?:\/\//i.test(t)){try{const u=new URL(t).searchParams;lot=(u.get('lot')||'').toUpperCase();item=u.get('item')||''}catch(e){}}
-  else if(/^PL-\d{6}-\d+$/i.test(t))lot=t.toUpperCase();
+  else if(/^PL-\d{6}-\d+(-\d+)*$/i.test(t))lot=t.toUpperCase();
   else if(t&&t.length<=40&&!/\s/.test(t))item=t.split('_').pop();   /* 옛 도면 QR(품번 글자) */
   if(!lot&&!item){show('err','공정이동표·도면 QR이 아닙니다.<br><small>'+esc(t)+'</small>');setTimeout(()=>busy=false,1500);return}
   try{navigator.vibrate&&navigator.vibrate(80)}catch(e){}
@@ -226,7 +239,7 @@ const canPick=canIn;
 /* 가공처별 발주·입고·미입고 (사무실 화면 siteBook 과 같은 계산) */
 function siteBook(p,mv){const bk={},g=c=>bk[c]||(bk[c]={sent:0,recv:0,pend:0});let so=0,ri=0;
   mv.filter(m=>m.proc_id===p.proc_id).forEach(m=>{if(m.move_type==='반출'||m.move_type==='사내투입'){g(m.to_site||p.site_cd).sent+=N(m.move_qty);so+=N(m.move_qty)}
-   else if(m.move_type==='본사입고'||m.move_type==='사내완료'){g(m.move_type==='사내완료'?HOME:(m.from_site||p.site_cd)).recv+=N(m.move_qty);ri+=N(m.move_qty)}});
+   else if(['본사입고','사내완료','미입고마감','직송입고'].includes(m.move_type)){g(m.move_type==='사내완료'?HOME:(m.from_site||p.site_cd)).recv+=N(m.move_qty);ri+=N(m.move_qty)}});
   const us=N(p.out_qty)-so,ur=N(p.in_qty)-ri;if(us>0)g(p.site_cd).sent+=us;if(ur>0)g(p.site_cd).recv+=ur;if(!Object.keys(bk).length)g(p.site_cd);
   Object.values(bk).forEach(v=>v.pend=Math.max(0,v.sent-v.recv));return bk}
 function sname(cd){const s=SITES[cd];return s?s.site_nm:(cd||'')}
@@ -240,18 +253,23 @@ function pick(p){if(!p)return;CUR.sel=p;renderSteps();
   if(bk.length>1){$('vSite').innerHTML='<select id="fromSel">'+bk.map(([c,v])=>'<option value="'+esc(c)+'" data-p="'+v.pend+'">'+esc(nm(c))+' — 미입고 '+v.pend+'</option>').join('')+'</select>';
    const fs=$('fromSel');fs.onchange=()=>{$('inQty').value=fs.selectedOptions[0].dataset.p};$('inQty').value=bk[0][1].pend}
   else{const c=bk.length?bk[0][0]:(p.inout_type==='사내'?HOME:p.site_cd);$('vSite').textContent=nm(c);$('vSite').dataset.c=c;$('inQty').value=pendOf(p)}
-  $('ngQty').value=0;$('inDate').value=today();
+  $('ngQty').value=0;$('inDate').value=today();['ngCause','ngAct','equip','wStart','wEnd'].forEach(i=>$(i).value='');
+  const fs0=$('fromSel');if(fs0){const f0=fs0.onchange;fs0.onchange=()=>{f0&&f0();exShow()}}exShow();
   $('inCard').classList.remove('hide');$('saveBtn').disabled=false;
   setTimeout(()=>$('inCard').scrollIntoView({behavior:'smooth',block:'start'}),50)}
 
 /* 로트 현재상태 갱신 (사무실 화면 updLot 과 같은 규칙) */
 async function updLotQR(p,row){
   const ps2=CUR.ps.map(x=>x.proc_id===p.proc_id?row:x).sort((a,b)=>N(a.seq)-N(b.seq));
-  let cs=0,cq=N(CUR.lot.lot_qty);ps2.forEach(x=>{if(x.status==='완료'){cs=N(x.seq);cq=Math.max(0,N(x.in_qty)-N(x.ng_qty))}});
+  let cs=0,cq=N(CUR.lot.lot_qty);ps2.forEach(x=>{if(x.status==='완료'){cs=N(x.seq);cq=Math.max(0,N(x.in_qty)-N(x.ng_qty)-N(x.split_qty))}});
   const act=ps2.find(x=>x.status==='반출'||x.status==='가공중');
   const gd=x=>Math.max(0,N(x.in_qty)-N(x.ng_qty)),fin=ps2.length>0&&ps2.every((x,i)=>x.status==='완료'&&N(x.out_qty)<=N(x.in_qty)&&(i?gd(ps2[i-1]):N(CUR.lot.lot_qty))-N(x.out_qty)<=0);
   await api('prod_lot?lot_no=eq.'+encodeURIComponent(p.lot_no),{method:'PATCH',headers:{Prefer:'return=minimal'},
     body:JSON.stringify({cur_seq:cs,remain_qty:cq,cur_site:act?act.site_cd:HOME,status:fin?'가공완료':'가공중',updated_at:nowIso(),updated_by:WHO})})}
+
+/* 불량이 있으면 원인·처리, 사내 입고면 설비·작업시간 */
+function curFrom(){const p=CUR&&CUR.sel,fs=$('fromSel');return fs?fs.value:($('vSite').dataset.c||(p&&p.site_cd))}
+function exShow(){$('ngBox').classList.toggle('hide',!(N($('ngQty').value)>0));$('inhBox').classList.toggle('hide',curFrom()!==HOME)}
 
 /* ── 입고 등록 (사무실 가공진행 화면의 '입고'와 같은 처리) ── */
 $('saveBtn').onclick=async()=>{
@@ -259,6 +277,8 @@ $('saveBtn').onclick=async()=>{
   const q=N($('inQty').value),ng=N($('ngQty').value),dt=$('inDate').value||today();
   if(q<=0)return alert('입고수량을 입력하세요.');
   if(ng<0||ng>q)return alert('불량 수량이 입고수량보다 클 수 없습니다.');
+  if(ng>0&&(!$('ngCause').value||!$('ngAct').value))return alert('불량 '+ng+' — 불량원인(가공/소재/취급)과 처리(재작업/폐기/반품)를 고르세요.');
+  const ws=$('wStart').value,we=$('wEnd').value;if(ws&&we&&we<ws)return alert('작업종료가 작업시작보다 빠릅니다.');
   const fs=$('fromSel'),from=fs?fs.value:($('vSite').dataset.c||p.site_cd);
   const lim=fs?N(fs.selectedOptions[0].dataset.p):pendOf(p);
   if(q>lim)return alert('입고수량('+q+')이 미입고 수량('+lim+')보다 많습니다.\n초과입고는 받지 않습니다. 더 들어온 수량은 사무실에서 [추가발주] 후 입고하세요.');
@@ -273,7 +293,8 @@ $('saveBtn').onclick=async()=>{
     if(!upd||!upd.length){show('err','그 사이 다른 곳에서 입고 처리되었습니다. 다시 조회했으니 확인 후 등록하세요.');return loadLot(p.lot_no,CUR.qr)}
     const inh=from===HOME;
     await api('lot_move',{method:'POST',headers:{Prefer:'return=minimal'},body:JSON.stringify([{move_no:mvNo(),lot_no:p.lot_no,proc_id:p.proc_id,move_type:inh?'사내완료':'본사입고',
-      from_site:from,to_site:HOME,move_qty:q,ng_qty:ng||null,move_date:dt,worker:WHO,scan_method:'QR',scan_qr:CUR.qr||null,scan_site_cd:HOME,seq:N(p.seq),
+      from_site:from,to_site:HOME,move_qty:q,ng_qty:ng||null,move_date:dt,worker:WHO,scan_method:'QR',scan_qr:CUR.qr||null,scan_site_cd:HOME,seq:N(p.seq),ng_cause:ng>0?$('ngCause').value:null,ng_action:ng>0?$('ngAct').value:null,
+      equip:inh?($('equip').value.trim()||null):null,work_start:inh&&ws?new Date(ws).toISOString():null,work_end:inh&&we?new Date(we).toISOString():null,
       created_at:nowIso(),created_by:WHO,updated_at:nowIso(),updated_by:WHO}])});
     await updLotQR(p,upd[0]);
     try{navigator.vibrate&&navigator.vibrate([60,40,60])}catch(e){}
@@ -295,7 +316,7 @@ function openPad(inp){
   $('npQuick').innerHTML=q.map(x=>'<button data-q="'+x+'">'+(isNg?'불량 없음 (0)':(x===pend?'미입고 전량 ':'')+x.toLocaleString())+'</button>').join('');
   $('npQuick').querySelectorAll('button').forEach(b=>b.onclick=()=>{inp.value=b.dataset.q;closePad()});
   NP.buf=String(N(inp.value)||'');npShow();$('npBg').classList.add('on')}
-function closePad(){$('npBg').classList.remove('on');NP=null}
+function closePad(){$('npBg').classList.remove('on');NP=null;exShow()}
 document.querySelectorAll('input.np').forEach(el=>{el.addEventListener('click',e=>{e.preventDefault();el.blur();openPad(el)});el.addEventListener('focus',()=>el.blur())});
 $('npKeys').querySelectorAll('button').forEach(b=>b.onclick=()=>{if(!NP)return;const k=b.dataset.k||b.textContent;
   if(k==='X')return closePad();
