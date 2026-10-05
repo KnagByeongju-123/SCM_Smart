@@ -53,6 +53,8 @@ async function click(d,id){const b=d.getElementById(id);if(!b||b.disabled)throw 
 const O={
  order:async(seq,site,q,due,o={})=>{const d=await win(seq);set(d,'w_site',site);set(d,'w_oqty',q);if(due)set(d,'w_due',due);if(o.noShip)d.getElementById('w_shipnow').checked=false;await click(d,'w_order')},
  ship:async(seq,q,to)=>{const d=await win(seq);if(to)set(d,'w_ssite',to);set(d,'w_sq2',q);await click(d,'w_ship')},
+ rwOut:async(seq,site,q)=>{const d=await win(seq);set(d,'rw_osite',site);set(d,'rw_oq',q);await click(d,'rw_out')},
+ rwIn:async(seq,site,q,ng=0)=>{const d=await win(seq);set(d,'rw_isite',site);set(d,'rw_iq',q);set(d,'rw_ing',ng);if(ng){set(d,'rw_cause','가공');set(d,'rw_act','폐기')}await click(d,'rw_in')},
  shipCancel:async(seq)=>{const d=await win(seq);await click(d,'w_shipc')},
  addOrderNoShip:async(seq,site,q)=>{const d=await win(seq);set(d,'w_asite',site);set(d,'w_aqty',q);d.getElementById('w_ashipnow').checked=false;await click(d,'w_add')},
  addOrder:async(seq,site,q)=>{const d=await win(seq);set(d,'w_asite',site);set(d,'w_aqty',q);await click(d,'w_add')},
@@ -92,7 +94,7 @@ function check(label,exp){const res=[];for(const [k,want] of Object.entries(exp)
   const ok=typeof want==='function'?want():String(got)===String(want);if(!ok){FAIL++;res.push('✗ '+k+' = '+got+' (기대 '+want+')')}}
  /* 공통 불변식: 공정 입고수량 = 이동기록 입고 합, 불량 = 이동기록 불량 합, 외주 발주 = 이동기록 반출 합 */
  [1,2,3].forEach(s=>{const p=lp(s);if(!p||p.status==='대기')return;
-  const RC=['본사입고','사내완료','미입고마감','직송입고'],ri=mv(s,RC).reduce((a,m)=>a+N(m.move_qty),0),rn=mv(s,RC).reduce((a,m)=>a+N(m.ng_qty),0);
+  const RC=['본사입고','사내완료','미입고마감','직송입고'],ri=mv(s,RC).reduce((a,m)=>a+N(m.move_qty),0),rn=mv(s,RC).reduce((a,m)=>a+N(m.ng_qty),0)-mv(s,['재작업입고']).reduce((a,m)=>a+N(m.move_qty)-N(m.ng_qty),0);
   if(ri!==N(p.in_qty)){FAIL++;res.push('✗ '+s+'공정 입고 '+N(p.in_qty)+' ≠ 이동기록 '+ri)}
   if(rn!==N(p.ng_qty)){FAIL++;res.push('✗ '+s+'공정 불량 '+N(p.ng_qty)+' ≠ 이동기록 '+rn)}
   {const so=mv(s,['반출','사내투입']).reduce((a,m)=>a+N(m.move_qty),0),sh=p.ship_qty==null?N(p.out_qty):N(p.ship_qty);if(so!==sh){FAIL++;res.push('✗ '+s+'공정 출고 '+sh+' ≠ 반출·사내투입 기록 '+so)}
@@ -227,4 +229,14 @@ await scenario('T6. [1] 사내 공정 분할 투입 — 600 중 300 사내투입
  await O.order(1,'V026',600);await QR(600);await O.confirm(1);await O.order(2,'V009',600);await QR(600,0,{seq:2});await O.confirm(2);
  await O.order(3,HOME,600,null,{noShip:true});const s=await QRship(300,{seq:3});check('QR 사내투입 300',{ok:()=>s.ok&&mv(3,['사내투입']).length===1,'lp.3.ship_qty':300});
  await QR(300,0,{seq:3});await QRship(300,{seq:3});await QR(300,0,{seq:3});await O.confirm(3);check('사내 600 완료 → 가공완료',{'lp.3.status':'완료','lot.status':'가공완료'})});
+await scenario('U1. [2] 재작업 — 600 입고 중 불량 20(재작업) → 원 협력사 재작업 출고 → 회수 20 중 2 여전히 불량',async()=>{
+ await O.order(1,'V026',600);await QR(600,20);await O.confirm(1);let a=await O.avail(2);check('확정 → 2공정 발주가능 '+a,{ok:()=>a===580});
+ const e=await officeErr(()=>O.rwOut(1,'V001',20));check('다른 업체로 재작업 → '+(e?'선택지에 없음':'처리됨(문제)'),{ok:()=>!!e});
+ await O.rwOut(1,'V026',20);check('재작업 출고 20 → 신성금속',{ok:()=>mv(1,['재작업출고']).length===1&&mv(1,['재작업출고'])[0].to_site==='V026','lp.1.ng_qty':20});
+ await O.rwIn(1,'V026',20,2);check('회수 20 (불량 2) → 양품 18 복귀, 확정 해제',{'lp.1.ng_qty':2,'lp.1.in_qty':600,'lp.1.status':'본사입고'});
+ await O.confirm(1);a=await O.avail(2);check('재확정 → 2공정 발주가능 '+a,{ok:()=>a===598})});
+await scenario('U2. [2] 처리=폐기는 재작업 대상 아님, 재작업·반품만 대기 · 재작업 기록 후 입고취소 막힘',async()=>{
+ await O.order(1,'V026',600);await O.in(1,300,10);let d=await win(1);check('불량 10 (처리=폐기) → 재작업 구역 '+(d.getElementById('rw_out')?'있음(문제)':'없음'),{ok:()=>!d.getElementById('rw_out')});
+ await QR(300,5);d=await win(1);const sel=d.getElementById('rw_osite');check('QR 불량 5 (처리=재작업) → 대기 '+(sel?sel.textContent.replace(/.*대기 /,''):'없음'),{ok:()=>sel&&/대기 5/.test(sel.textContent)});
+ await O.rwOut(1,'V026',5);const e=await officeErr(()=>O.cancelIn(1));check('재작업 후 입고취소 → '+(e?'막힘':'취소됨(문제)'),{ok:()=>!!e})});
 console.log('\n'+(FAIL?'❌ 실패 '+FAIL+'건':'✅ 전체 통과'));process.exit(FAIL?1:0)})();
