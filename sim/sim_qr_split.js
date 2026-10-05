@@ -68,8 +68,10 @@ const O={
  confirm:async(seq)=>{const d=await win(seq);await click(d,'w_conf')},
  cancelIn:async(seq)=>{const d=await win(seq);await click(d,'w_icancel')},
  avail:async(seq)=>{await reload();const d=await win(seq);const x=d.getElementById('w_oqty');return x?Number(x.value):null}};
-async function qrOpen(){const dom=new JSDOM(QRIN,{runScripts:'dangerously',url:'https://x.github.io/SCM_Smart/qr_in.html?lot='+LOT,virtualConsole:vc,beforeParse(w){common(w);w.Html5Qrcode=class{};try{w.localStorage.setItem('scm_qr_worker','현장작업자')}catch(e){}}});
- await wait(150);return dom.window}
+async function qrOpen(org='HQ'){const dom=new JSDOM(QRIN,{runScripts:'dangerously',url:'https://x.github.io/SCM_Smart/qr_in.html?lot='+LOT,virtualConsole:vc,beforeParse(w){common(w);w.Html5Qrcode=class{};try{w.localStorage.setItem('scm_qr_worker',org==='HQ'?'현장작업자':'협력사담당');w.localStorage.setItem('scm_qr_org',org)}catch(e){}}});
+ await wait(250);return dom.window}
+async function QRrcv(org,qs){const w=await qrOpen(org),d=w.document;const out={org:d.getElementById('orgTxt').textContent,cards:['inCard','shipCard','rcvCard'].filter(i=>!d.getElementById(i).classList.contains('hide')),items:d.querySelectorAll('#rcvList .rb').length,msg:d.getElementById('msg').textContent.slice(0,60)};
+ for(const q of (qs||[])){const inp=d.querySelector('#rcvList .rq');if(!inp)break;inp.value=q;d.querySelector('#rcvList .rb').onclick();await wait(200)}return out}
 async function QR(q,ng=0,o={}){const w=o.win||await qrOpen(),d=w.document;
  if(o.seq){const st=d.querySelector('.step.pick[data-id="'+LOT+'-P'+o.seq+'"]');if(!st)return {ok:false,msg:'공정 '+o.seq+' 선택불가(입고대상 아님)'};st.onclick();await wait(30)}
  if(d.getElementById('inCard').classList.contains('hide'))return {ok:false,msg:d.getElementById('msg').textContent};
@@ -239,4 +241,18 @@ await scenario('U2. [2] 처리=폐기는 재작업 대상 아님, 재작업·반
  await O.order(1,'V026',600);await O.in(1,300,10);let d=await win(1);check('불량 10 (처리=폐기) → 재작업 구역 '+(d.getElementById('rw_out')?'있음(문제)':'없음'),{ok:()=>!d.getElementById('rw_out')});
  await QR(300,5);d=await win(1);const sel=d.getElementById('rw_osite');check('QR 불량 5 (처리=재작업) → 대기 '+(sel?sel.textContent.replace(/.*대기 /,''):'없음'),{ok:()=>sel&&/대기 5/.test(sel.textContent)});
  await O.rwOut(1,'V026',5);const e=await officeErr(()=>O.cancelIn(1));check('재작업 후 입고취소 → '+(e?'막힘':'취소됨(문제)'),{ok:()=>!!e})});
+await scenario('V1. [3] 협력사 수령확인 — 신성금속에 600 출고, 신성이 590 수령 → 본사에 수령차이 10 → 운송차이 마감',async()=>{
+ await O.order(1,'V026',600);let r=await QRrcv('V026',[590]);check('협력사 화면: 소속 '+r.org+' · 보이는 카드 '+r.cards.join(',')+' · 수령대기 '+r.items+'건',{ok:()=>r.org==='신성금속'&&r.cards.join()==='rcvCard'&&r.items===1});
+ const rc=DB.lot_move.find(m=>m.move_type==='수령확인');check('수령확인 기록 590 (출고건 연결)',{ok:()=>rc&&rc.move_qty===590&&rc.ref_move===mv(1,['반출'])[0].move_no,'lp.1.in_qty':'undefined'});
+ await reload();const td=OF.document.querySelector('td.st[data-lot="'+LOT+'"][data-seq="1"]');check('본사 목록 「'+(td?td.querySelector('small').textContent:'')+'」',{ok:()=>td&&/수령차이 10/.test(td.textContent)});
+ r=await QRrcv('V026');check('다시 찍으면 수령할 것 없음',{ok:()=>r.items===0});
+ await QR(590);await O.close(1,10,'운송차이');await reload();const td2=OF.document.querySelector('td.st[data-lot="'+LOT+'"][data-seq="1"]');check('590 입고 + 운송차이 10 마감 → 수령차이 표시 해제',{'lp.1.in_qty':600,'lp.1.ng_qty':10,ok:()=>td2&&!/수령차이/.test(td2.textContent)})});
+await scenario('V2. [3] 나눠 출고 2건 → 협력사 2건 각각 확인 · 다른 협력사는 안 보임 · 확인된 출고는 취소 못 함',async()=>{
+ await O.order(1,'V026',600,null,{noShip:true});await O.ship(1,300);await O.ship(1,300);
+ let r=await QRrcv('V001');check('성광정밀 화면 → 수령대기 '+r.items+'건',{ok:()=>r.items===0});
+ r=await QRrcv('V026',[300,300]);check('신성금속 2건 확인',{ok:()=>r.items===2&&DB.lot_move.filter(m=>m.move_type==='수령확인').length===2});
+ const e=await officeErr(()=>O.shipCancel(1));check('수령확인된 출고 취소 → '+(e?'막힘':'취소됨(문제)'),{ok:()=>!!e,'lp.1.ship_qty':600})});
+await scenario('V3. [3] 재작업 출고도 협력사 수령확인 대상',async()=>{
+ await O.order(1,'V026',600);await QRrcv('V026',[600]);await QR(600,20);await O.rwOut(1,'V026',20);
+ const r=await QRrcv('V026',[20]);check('재작업 20 수령확인',{ok:()=>r.items===1&&DB.lot_move.filter(m=>m.move_type==='수령확인').length===2})});
 console.log('\n'+(FAIL?'❌ 실패 '+FAIL+'건':'✅ 전체 통과'));process.exit(FAIL?1:0)})();

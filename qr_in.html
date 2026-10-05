@@ -68,7 +68,7 @@ input.np{cursor:pointer;font-size:20px;font-weight:700;text-align:right;caret-co
 </style>
 </head>
 <body>
-<header><div><h1>📥 QR 입고</h1><small>경일FB · SCM Smart</small></div><button class="btn" id="whoBtn" style="height:34px;font-size:13px">👤 <span id="whoTxt"></span></button></header>
+<header><div><h1 id="hTitle">📥 QR 출고·입고</h1><small>경일FB · SCM Smart</small></div><div style="display:flex;gap:6px"><button class="btn" id="orgBtn" style="height:34px;font-size:13px">🏢 <span id="orgTxt"></span></button><button class="btn" id="whoBtn" style="height:34px;font-size:13px">👤 <span id="whoTxt"></span></button></div></header>
 <main>
   <div id="msg" class="msg"></div>
 
@@ -95,6 +95,12 @@ input.np{cursor:pointer;font-size:20px;font-weight:700;text-align:right;caret-co
       <b>로트수량</b><span id="vQty"></span>
     </div>
     <div class="steps" id="steps"></div>
+  </section>
+
+  <section class="card hide" id="rcvCard">
+    <h2>📦 수령 확인 <small class="small" id="rcvOrg"></small></h2>
+    <div id="rcvList"></div>
+    <p class="small" style="margin:8px 0 0">실제로 받은 수량을 입력하세요. 보낸 수량과 다르면 본사에 '수령차이'로 표시됩니다.</p>
   </section>
 
   <section class="card hide" id="shipCard">
@@ -143,6 +149,14 @@ input.np{cursor:pointer;font-size:20px;font-weight:700;text-align:right;caret-co
   <div class="row hide" id="nextRow"><button class="btn primary" id="nextBtn">📷 다음 이동표 스캔</button></div>
 </main>
 
+<div id="orgBg" style="position:fixed;inset:0;background:rgba(20,30,40,.55);z-index:60;display:none;align-items:center;justify-content:center;padding:16px">
+  <div style="background:#fff;border-radius:14px;max-width:420px;width:100%;max-height:85vh;overflow:auto;padding:16px">
+    <h2 style="margin:0 0 4px;font-size:17px">소속을 선택하세요</h2>
+    <p class="small" style="margin:0 0 12px">이 휴대폰에 기억됩니다. 본사는 출고·입고, 협력사는 자기 앞으로 온 물건의 수령확인을 합니다.</p>
+    <div id="orgList" class="steps"></div>
+  </div>
+</div>
+
 <div id="npBg"><div id="np">
   <div id="npHd"><b id="npTitle"></b><small id="npHint"></small></div>
   <div id="npVal"></div>
@@ -170,6 +184,17 @@ const LSW='scm_qr_worker';
 let WHO='';try{WHO=localStorage.getItem(LSW)||''}catch(e){}
 function setWho(){const n=prompt('작업자 이름을 입력하세요',WHO||'');if(n&&n.trim()){WHO=n.trim();try{localStorage.setItem(LSW,WHO)}catch(e){}}$('whoTxt').textContent=WHO||'작업자'}
 $('whoBtn').onclick=setWho;$('whoTxt').textContent=WHO||'작업자';
+/* 소속: 'HQ' = 본사(출고·입고) / 협력사 코드 = 수령확인만 */
+const LSO='scm_qr_org';let ORG='';try{ORG=localStorage.getItem(LSO)||''}catch(e){}
+const isHQ=()=>ORG==='HQ';
+function orgName(){return !ORG?'소속 선택':(isHQ()?'본사':((SITES[ORG]||{}).site_nm||ORG))}
+function orgShow(){$('orgTxt').textContent=orgName();$('hTitle').textContent=!ORG||isHQ()?'📥 QR 출고·입고':'📦 QR 수령확인'}
+function pickOrg(){return new Promise(res=>{const L=[{c:'HQ',n:'🏠 본사 (경일FB)'}].concat(Object.values(SITES).filter(s=>s.site_type==='외주').sort((a,b)=>String(a.site_nm).localeCompare(String(b.site_nm))).map(s=>({c:s.site_cd,n:s.site_nm})));
+  $('orgList').innerHTML=L.map(x=>'<div class="step pick'+(x.c===ORG?' sel':'')+'" data-c="'+esc(x.c)+'"><span class="nm"><b>'+esc(x.n)+'</b></span></div>').join('');
+  $('orgList').querySelectorAll('.step').forEach(el=>el.onclick=()=>{ORG=el.dataset.c;try{localStorage.setItem(LSO,ORG)}catch(e){}$('orgBg').style.display='none';orgShow();res(ORG)});
+  $('orgBg').style.display='flex'})}
+async function ensureSites(){if(!Object.keys(SITES).length)(await get('process_site','select=site_cd,site_nm,site_type,use_yn')).forEach(s=>SITES[s.site_cd]=s)}
+$('orgBtn').onclick=async()=>{await ensureSites();const before=ORG;await pickOrg();if(ORG!==before&&CUR)loadLot(CUR.lot.lot_no,CUR.qr)};
 
 async function api(path,opt={}){
   const r=await fetch(URL_+path,{...opt,headers:{apikey:KEY,Authorization:'Bearer '+KEY,'Content-Type':'application/json',...(opt.headers||{})}});
@@ -211,7 +236,7 @@ $('lotBtn').onclick=()=>{const v=$('lotIn').value.trim().toUpperCase();if(v)load
 $('lotIn').onkeydown=e=>{if(e.key==='Enter')$('lotBtn').click()};
 
 /* ── 품번 QR(가공공정도면): 그 품번의 미입고 로트 목록 → 하나 고르면 입고 ── */
-async function loadItem(cd,qr){
+async function loadItem(cd,qr){if(ORG&&!isHQ())return loadItemV(cd,qr);
   hideMsg();['lotCard','inCard','nextRow'].forEach(i=>$(i).classList.add('hide'));
   try{
     const lots=await get('prod_lot','select=lot_no,lot_qty,status&item_cd=eq.'+encodeURIComponent(cd)+'&status=neq.종료&order=lot_no');
@@ -229,13 +254,13 @@ async function loadItem(cd,qr){
 /* ── 로트 조회 ── */
 let CUR=null,SITES={};
 const ST={'대기':['대기','t-wait'],'반출':['발주(가공중)','t-out'],'가공중':['발주(가공중)','t-out'],'본사입고':['입고','t-in'],'완료':['입고확정','t-done']};
-async function loadLot(lot,qr){
+async function loadLot(lot,qr){if(ORG&&!isHQ())return loadLotV(lot,qr);
   hideMsg();['inCard','shipCard','nextRow'].forEach(i=>$(i).classList.add('hide'));const keep=CUR&&CUR.sel&&CUR.sel.proc_id;
   try{
     const [lots,ps,mv,sites]=await Promise.all([
       get('prod_lot','select=*&lot_no=eq.'+encodeURIComponent(lot)),
       get('lot_process','select=*&lot_no=eq.'+encodeURIComponent(lot)+'&order=seq'),
-      get('lot_move','select=proc_id,move_type,from_site,to_site,move_qty&lot_no=eq.'+encodeURIComponent(lot)),
+      get('lot_move','select=move_no,proc_id,move_type,from_site,to_site,move_qty,ref_move&lot_no=eq.'+encodeURIComponent(lot)),
       Object.keys(SITES).length?Promise.resolve(null):get('process_site','select=site_cd,site_nm,site_type')]);
     if(sites)sites.forEach(s=>SITES[s.site_cd]=s);
     if(!lots.length){$('lotCard').classList.add('hide');show('err','로트 <b>'+esc(lot)+'</b> 를 찾을 수 없습니다.');return}
@@ -325,7 +350,53 @@ $('saveBtn').onclick=async()=>{
     $('inCard').classList.add('hide');$('nextRow').classList.remove('hide');
     return loadLot(p.lot_no,CUR.qr).then(()=>{show('ok','✔ <b>'+esc(p.lot_no)+'</b> '+N(p.seq)+'공정 '+esc(p.proc_nm||'')+' 입고 등록 완료<br>입고 '+q.toLocaleString()+(ng?' · 불량 '+ng:'')+'<br><small>입고확정은 사무실에서 합니다.</small>');$('nextRow').classList.remove('hide')});
   }catch(e){show('err','등록 실패: '+esc(e.message||e));$('saveBtn').disabled=false}};
-$('nextBtn').onclick=()=>{hideMsg();$('lotCard').classList.add('hide');$('shipCard').classList.add('hide');$('itemCard').classList.add('hide');$('nextRow').classList.add('hide');$('lotIn').value='';window.scrollTo(0,0);startCam()};
+$('nextBtn').onclick=()=>{hideMsg();$('lotCard').classList.add('hide');$('rcvCard').classList.add('hide');$('shipCard').classList.add('hide');$('itemCard').classList.add('hide');$('nextRow').classList.add('hide');$('lotIn').value='';window.scrollTo(0,0);startCam()};
+
+/* ── 협력사 수령확인: 우리 앞으로 온 출고건(반출·재작업출고) 중 아직 확인 안 한 것 ── */
+const SHIP_T=['반출','재작업출고'];
+function pendingRcv(mv){const done=new Set(mv.filter(m=>m.move_type==='수령확인').map(m=>m.ref_move));
+  return mv.filter(m=>SHIP_T.includes(m.move_type)&&m.to_site===ORG&&!done.has(m.move_no)).sort((a,b)=>String(a.move_date||'').localeCompare(String(b.move_date||'')))}
+async function loadLotV(lot,qr){
+  hideMsg();['inCard','shipCard','rcvCard','itemCard','nextRow'].forEach(i=>$(i).classList.add('hide'));
+  try{await ensureSites();
+    const [lots,ps,mv]=await Promise.all([get('prod_lot','select=*&lot_no=eq.'+encodeURIComponent(lot)),get('lot_process','select=*&lot_no=eq.'+encodeURIComponent(lot)+'&order=seq'),
+      get('lot_move','select=move_no,proc_id,move_type,from_site,to_site,move_qty,move_date,ref_move&lot_no=eq.'+encodeURIComponent(lot))]);
+    if(!lots.length){$('lotCard').classList.add('hide');show('err','로트 <b>'+esc(lot)+'</b> 를 찾을 수 없습니다.');return}
+    const l=lots[0];CUR={lot:l,ps,mv,act:[],qr,sel:null};
+    $('vLot').textContent=l.lot_no;$('vItem').textContent=l.item_cd||'';$('vQty').textContent=N(l.lot_qty).toLocaleString();$('steps').innerHTML='';$('lotCard').classList.remove('hide');
+    const P=pendingRcv(mv);$('rcvOrg').textContent='— '+orgName();
+    if(!P.length){show('info','<b>'+esc(orgName())+'</b> 앞으로 온, 수령확인할 출고가 없습니다.');$('nextRow').classList.remove('hide');return}
+    const pp=id=>ps.find(x=>x.proc_id===id)||{};
+    $('rcvList').innerHTML=P.map((m,i)=>{const x=pp(m.proc_id);return '<div class="step" style="flex-wrap:wrap"><span class="nm"><b>'+N(x.seq)+'공정 '+esc(x.proc_nm||'')+(m.move_type==='재작업출고'?' (재작업)':'')+'</b><small>'+esc(String(m.move_date||'').slice(0,10))+' · '+esc(m.from_site===HOME?'본사':sname(m.from_site))+' 에서 보냄 <b>'+N(m.move_qty).toLocaleString()+'</b></small></span>'
+      +'<div class="row" style="width:100%;margin-top:6px"><input class="np rq" readonly inputmode="none" data-i="'+i+'" data-label="받은 수량" data-sent="'+N(m.move_qty)+'" value="'+N(m.move_qty)+'"><button class="btn primary rb" data-i="'+i+'" style="flex:0 0 110px">수령 확인</button></div></div>'}).join('');
+    $('rcvList').querySelectorAll('input.np').forEach(bindPad);
+    $('rcvList').querySelectorAll('.rb').forEach(b=>b.onclick=()=>saveRcv(P[+b.dataset.i],N($('rcvList').querySelector('.rq[data-i="'+b.dataset.i+'"]').value),b));
+    $('rcvCard').classList.remove('hide');setTimeout(()=>$('rcvCard').scrollIntoView({behavior:'smooth',block:'start'}),50)
+  }catch(e){show('err','조회 실패: '+esc(e.message||e))}}
+async function saveRcv(m,q,b){
+  if(q<0)return alert('받은 수량을 확인하세요.');if(!WHO){setWho();if(!WHO)return}
+  const sent=N(m.move_qty),d=q-sent;
+  if(!confirm('보낸 '+sent+' · 받은 '+q+(d?' (차이 '+(d>0?'+':'')+d+')':'')+'\n수령 확인할까요?'))return;
+  b.disabled=true;
+  try{const ex=await get('lot_move','select=move_no&move_type=eq.'+encodeURIComponent('수령확인')+'&ref_move=eq.'+encodeURIComponent(m.move_no));
+    if(ex.length){show('err','이미 수령확인된 출고입니다.');return loadLotV(CUR.lot.lot_no,CUR.qr)}
+    const p=CUR.ps.find(x=>x.proc_id===m.proc_id)||{};
+    await api('lot_move',{method:'POST',headers:{Prefer:'return=minimal'},body:JSON.stringify([{move_no:mvNo(),lot_no:CUR.lot.lot_no,proc_id:m.proc_id,move_type:'수령확인',from_site:m.from_site,to_site:ORG,move_qty:q,
+      move_date:today(),worker:WHO,scan_method:'QR',scan_qr:CUR.qr||null,scan_site_cd:ORG,seq:N(p.seq)||null,ref_move:m.move_no,remark:d?'수령차이 '+(d>0?'+':'')+d:null,created_at:nowIso(),created_by:WHO,updated_at:nowIso(),updated_by:WHO}])});
+    try{navigator.vibrate&&navigator.vibrate([60,40,60])}catch(e){}
+    await loadLotV(CUR.lot.lot_no,CUR.qr);show(d?'info':'ok','✔ 수령 확인 '+q.toLocaleString()+(d?' — 보낸 수량과 '+(d>0?'+':'')+d+' 차이, 본사에 표시됩니다.':''));$('nextRow').classList.remove('hide')
+  }catch(e){show('err','수령확인 실패: '+esc(e.message||e));b.disabled=false}}
+async function loadItemV(cd,qr){
+  hideMsg();['lotCard','inCard','shipCard','rcvCard','nextRow'].forEach(i=>$(i).classList.add('hide'));
+  try{await ensureSites();const lots=await get('prod_lot','select=lot_no&item_cd=eq.'+encodeURIComponent(cd)+'&status=neq.종료&order=lot_no');
+    const mv=lots.length?await get('lot_move','select=move_no,lot_no,proc_id,move_type,to_site,move_qty,ref_move&lot_no=in.('+lots.map(l=>'"'+l.lot_no+'"').join(',')+')'):[];
+    const L=lots.map(l=>({l,a:pendingRcv(mv.filter(m=>m.lot_no===l.lot_no))})).filter(x=>x.a.length);
+    $('vItemCd').textContent=cd;$('itemCard').classList.remove('hide');
+    if(!L.length){$('itemLots').innerHTML='<div class="small">'+esc(orgName())+' 앞으로 온, 수령확인할 로트가 없습니다.</div>';$('nextRow').classList.remove('hide');return}
+    $('itemLots').innerHTML=L.map(x=>'<div class="step pick" data-lot="'+esc(x.l.lot_no)+'"><span class="nm"><b>'+esc(x.l.lot_no)+'</b><small>출고 '+x.a.length+'건 · '+x.a.reduce((s,m)=>s+N(m.move_qty),0).toLocaleString()+'</small></span><span class="tag t-out">수령</span></div>').join('');
+    $('itemLots').querySelectorAll('.step').forEach(el=>el.onclick=()=>{$('itemCard').classList.add('hide');loadLotV(el.dataset.lot,qr)});
+    if(L.length===1){$('itemCard').classList.add('hide');loadLotV(L[0].l.lot_no,qr)}
+  }catch(e){show('err','조회 실패: '+esc(e.message||e))}}
 
 /* ── 출고 등록 (사무실 [출고]와 같은 처리) ── */
 $('shipBtn').onclick=async()=>{
@@ -352,16 +423,17 @@ $('shipBtn').onclick=async()=>{
 let NP=null;
 function npShow(){const v=NP.buf;$('npVal').textContent=v===''?'0':Number(v).toLocaleString();$('npVal').classList.toggle('ph',v==='')}
 function openPad(inp){
-  const p=CUR&&CUR.sel,isShip=inp.id==='shipQty',pend=p?(isShip?unOf(p):pendOf(p)):0,isNg=inp.id==='ngQty',iq=N($('inQty').value);
+  const p=CUR&&CUR.sel,isShip=inp.id==='shipQty',isRcv=inp.classList.contains('rq'),pend=isRcv?N(inp.dataset.sent):(p?(isShip?unOf(p):pendOf(p)):0),isNg=inp.id==='ngQty',iq=N($('inQty').value);
   NP={inp,buf:'',first:true};
   $('npTitle').textContent=inp.dataset.label;
-  $('npHint').textContent=isNg?'입고수량 '+iq.toLocaleString()+' 중':(isShip?'미출고 ':'미입고 ')+pend.toLocaleString();
+  $('npHint').textContent=isNg?'입고수량 '+iq.toLocaleString()+' 중':(isRcv?'보낸 수량 ':(isShip?'미출고 ':'미입고 '))+pend.toLocaleString();
   const q=isNg?[0]:[...new Set([pend,N(inp.value)].filter(x=>x>0))];
-  $('npQuick').innerHTML=q.map(x=>'<button data-q="'+x+'">'+(isNg?'불량 없음 (0)':(x===pend?(isShip?'미출고 전량 ':'미입고 전량 '):'')+x.toLocaleString())+'</button>').join('');
+  $('npQuick').innerHTML=q.map(x=>'<button data-q="'+x+'">'+(isNg?'불량 없음 (0)':(x===pend?(isRcv?'보낸 수량 그대로 ':(isShip?'미출고 전량 ':'미입고 전량 ')):'')+x.toLocaleString())+'</button>').join('');
   $('npQuick').querySelectorAll('button').forEach(b=>b.onclick=()=>{inp.value=b.dataset.q;closePad()});
   NP.buf=String(N(inp.value)||'');npShow();$('npBg').classList.add('on')}
-function closePad(){$('npBg').classList.remove('on');NP=null;exShow()}
-document.querySelectorAll('input.np').forEach(el=>{el.addEventListener('click',e=>{e.preventDefault();el.blur();openPad(el)});el.addEventListener('focus',()=>el.blur())});
+function closePad(){$('npBg').classList.remove('on');NP=null;try{exShow()}catch(e){}}
+function bindPad(el){el.addEventListener('click',e=>{e.preventDefault();el.blur();openPad(el)});el.addEventListener('focus',()=>el.blur())}
+document.querySelectorAll('input.np').forEach(bindPad);
 $('npKeys').querySelectorAll('button').forEach(b=>b.onclick=()=>{if(!NP)return;const k=b.dataset.k||b.textContent;
   if(k==='X')return closePad();
   if(k==='OK'){NP.inp.value=N(NP.buf);return closePad()}
@@ -370,6 +442,7 @@ $('npKeys').querySelectorAll('button').forEach(b=>b.onclick=()=>{if(!NP)return;c
   NP.first=false;try{navigator.vibrate&&navigator.vibrate(15)}catch(e){}npShow()});
 $('npBg').onclick=e=>{if(e.target.id==='npBg')closePad()};
 
-const QS=new URLSearchParams(location.search),qp=QS.get('lot'),qi=QS.get('item');if(qp)loadLot(qp.toUpperCase(),location.href);else if(qi)loadItem(qi,location.href);
+const QS=new URLSearchParams(location.search),qp=QS.get('lot'),qi=QS.get('item');
+(async()=>{try{await ensureSites()}catch(e){}orgShow();if(!ORG)await pickOrg();if(qp)loadLot(qp.toUpperCase(),location.href);else if(qi)loadItem(qi,location.href)})();
 </script>
 </body></html>
