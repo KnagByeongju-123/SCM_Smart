@@ -465,7 +465,13 @@ async function listRcv(){$('listTitle').textContent='📋 수령 대기 — '+or
      get('lot_move','select=move_no,ref_move,move_type,to_site&to_site=eq.'+encodeURIComponent(ORG)+'&move_type=eq.'+encodeURIComponent('수령확인'))]);
    const P=pendingRcv(a.concat(b));
    if(!P.length){$('listBody').innerHTML='<div class="small">수령확인할 출고가 없습니다.</div>';return}
-   $('listBody').innerHTML=P.map(m=>'<div class="lrow" data-lot="'+esc(m.lot_no)+'"><span class="nm"><b>'+esc(m.lot_no)+(m.move_type==='재작업출고'?' (재작업)':'')+'</b><small>'+esc(String(m.move_date||'').slice(0,10))+' · '+esc(m.from_site===HOME?'본사':sname(m.from_site))+' 에서</small></span><span class="q">'+N(m.move_qty).toLocaleString()+'</span></div>').join('');
+   /* 품번이 여러 개면 현장은 품번으로 찾는다 → 품번별로 묶고, 행에 품번·공정 표시 */
+   const ids=[...new Set(P.map(m=>m.lot_no))],[ls,ps]=await Promise.all([get('prod_lot','select=lot_no,item_cd&lot_no=in.('+ids.map(x=>'"'+x+'"').join(',')+')'),
+     get('lot_process','select=proc_id,seq,proc_nm&lot_no=in.('+ids.map(x=>'"'+x+'"').join(',')+')')]);
+   const IT={},PR={};ls.forEach(l=>IT[l.lot_no]=l.item_cd||'');ps.forEach(x=>PR[x.proc_id]=x);
+   const by={};P.forEach(m=>{const k=IT[m.lot_no]||'(품번 없음)';(by[k]=by[k]||[]).push(m)});
+   $('listBody').innerHTML=Object.keys(by).sort().map(k=>'<div class="lgrp">'+esc(k)+' · '+by[k].length+'건 · '+by[k].reduce((a,m)=>a+N(m.move_qty),0).toLocaleString()+'</div>'
+     +by[k].map(m=>{const x=PR[m.proc_id]||{};return '<div class="lrow" data-lot="'+esc(m.lot_no)+'"><span class="nm"><b>'+esc(m.lot_no)+(m.move_type==='재작업출고'?' (재작업)':'')+'</b><small>'+esc(k)+(x.seq?' · '+N(x.seq)+'공정 '+esc(x.proc_nm||''):'')+' · '+esc(String(m.move_date||'').slice(0,10))+' · '+esc(m.from_site===HOME?'본사':sname(m.from_site))+' 에서</small></span><span class="q">'+N(m.move_qty).toLocaleString()+'</span></div>'}).join('')).join('');
    $('listBody').querySelectorAll('.lrow').forEach(el=>el.onclick=()=>{$('listCard').classList.add('hide');loadLotV(el.dataset.lot,'')})
   }catch(e){$('listBody').innerHTML='<div class="small">조회 실패: '+esc(e.message||e)+'</div>'}}
 
