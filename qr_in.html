@@ -274,7 +274,7 @@ async function loadItem(cd,qr){if(ORG&&!isHQ())return loadItemV(cd,qr);
   try{
     const lots=await get('prod_lot','select=lot_no,lot_qty,status&item_cd=eq.'+encodeURIComponent(cd)+'&status=neq.종료&order=lot_no');
     if(!lots.length){$('itemCard').classList.add('hide');show('err','품번 <b>'+esc(cd)+'</b> 의 진행 중인 로트가 없습니다.');return}
-    const ps=await get('lot_process','select=lot_no,seq,proc_nm,site_cd,inout_type,status,out_qty,in_qty&lot_no=in.('+lots.map(l=>'"'+l.lot_no+'"').join(',')+')&order=seq');
+    const ps=await get('lot_process','select=lot_no,seq,proc_nm,site_cd,inout_type,status,out_qty,ship_qty,in_qty&lot_no=in.('+lots.map(l=>'"'+l.lot_no+'"').join(',')+')&order=seq');
     if(!Object.keys(SITES).length)(await get('process_site','select=site_cd,site_nm,site_type')).forEach(s=>SITES[s.site_cd]=s);
     const L=lots.map(l=>({l,a:ps.filter(x=>x.lot_no===l.lot_no&&canPick(x))})).filter(x=>x.a.length);
     $('vItemCd').textContent=cd;$('itemCard').classList.remove('hide');
@@ -490,7 +490,7 @@ $('shipBtn').onclick=async()=>{
       body:JSON.stringify({ship_qty:SH(p)+q,status:'반출',done_date:null,confirm_yn:false,confirm_by:null,confirm_date:null,updated_at:nowIso(),updated_by:WHO})});
     if(!upd||!upd.length){show('err','그 사이 다른 곳에서 출고 처리되었습니다. 다시 조회했으니 확인 후 등록하세요.');return loadLot(p.lot_no,CUR.qr)}
     await api('lot_move',{method:'POST',headers:{Prefer:'return=minimal'},body:JSON.stringify([{move_no:mvNo(),lot_no:p.lot_no,proc_id:p.proc_id,move_type:to===HOME?'사내투입':'반출',
-      from_site:HOME,to_site:to,move_qty:q,move_date:dt,worker:WHO,scan_method:'QR',scan_qr:CUR.qr||null,scan_site_cd:HOME,seq:N(p.seq),created_at:nowIso(),created_by:WHO,updated_at:nowIso(),updated_by:WHO}])});
+      from_site:HOME,to_site:to,move_qty:q,move_date:dt,remark:'분할출고',worker:WHO,scan_method:'QR',scan_qr:CUR.qr||null,scan_site_cd:HOME,seq:N(p.seq),created_at:nowIso(),created_by:WHO,updated_at:nowIso(),updated_by:WHO}])});
     await updLotQR(p,upd[0]);
     try{navigator.vibrate&&navigator.vibrate([60,40,60])}catch(e){}
     return loadLot(p.lot_no,CUR.qr).then(()=>{show('ok','✔ <b>'+esc(p.lot_no)+'</b> '+N(p.seq)+'공정 '+esc(p.proc_nm||'')+' 출고 '+q.toLocaleString()+' → '+esc(to===HOME?'사내':sname(to)));$('nextRow').classList.remove('hide')});
